@@ -1224,6 +1224,91 @@ bool runZoomOutCheck(QApplication &application, QString &error) {
   return true;
 }
 
+/** Outlined text renders a white halo around colored glyphs and survives
+ *  the op log; plain text renders no halo. */
+bool runTextOutlineCheck(QString &error) {
+  CaptureData capture;
+  capture.monitor.scale = 1.0;
+  capture.monitor.pixelSize = {400, 200};
+  capture.source = QImage(400, 200, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  Annotation text;
+  text.kind = Annotation::Kind::Text;
+  text.start = {30, 50};
+  text.color = QColor(QStringLiteral("#ff375f"));
+  text.size = 5;
+  text.text = QStringLiteral("Ok");
+  text.textBackground = TextBackground::Outline;
+
+  const QRect band =
+      annotationTextBounds(text).toAlignedRect().adjusted(-6, -6, 6, 6);
+  const auto count = [&band](const QImage &frame, auto match) {
+    int hits = 0;
+    for (int y = band.top(); y <= band.bottom(); ++y)
+      for (int x = band.left(); x <= band.right(); ++x)
+        if (frame.rect().contains(x, y) && match(frame.pixelColor(x, y)))
+          ++hits;
+    return hits;
+  };
+  const auto halo = [](const QColor &c) {
+    return c.red() >= 225 && c.green() >= 225 && c.blue() >= 225;
+  };
+  const auto glyph = [](const QColor &c) {
+    return c.red() > 200 && c.green() < 120 && c.blue() < 140;
+  };
+
+  const QImage outlined = renderCapture(capture, QRectF(0, 0, 400, 200), {text},
+                                        BackgroundStyle::None);
+  if (count(outlined, halo) < 20) {
+    error = QStringLiteral("Outlined text drew no white halo");
+    return false;
+  }
+  if (count(outlined, glyph) < 20) {
+    error = QStringLiteral("Outlined text lost its glyph color");
+    return false;
+  }
+  text.textBackground = TextBackground::Plain;
+  const QImage plain = renderCapture(capture, QRectF(0, 0, 400, 200), {text},
+                                     BackgroundStyle::None);
+  if (count(plain, halo) != 0) {
+    error = QStringLiteral("Plain text grew a halo");
+    return false;
+  }
+
+  // The style survives a save and load of the op log, so reopening a capture
+  // does not quietly turn outlined text back into a pill.
+  text.textBackground = TextBackground::Outline;
+  text.id = 1;
+  OperationLog log;
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {text};
+  log.ops.push_back(std::move(annotate));
+  log.index = log.ops.size();
+  log.nextId = 2;
+  const QString logPath =
+      QDir(QDir::tempPath()).filePath(QStringLiteral("outline-oplog.json"));
+  OperationLog loaded;
+  QString logError;
+  if (!saveOperationLog(logPath, log, logError) ||
+      !loadOperationLog(logPath, loaded, logError)) {
+    QFile::remove(logPath);
+    error = QStringLiteral("Op log with outlined text failed to round-trip: %1")
+                .arg(logError);
+    return false;
+  }
+  QFile::remove(logPath);
+  if (loaded.ops.size() != 1 || loaded.ops.constFirst().annotations.isEmpty() ||
+      loaded.ops.constFirst().annotations.constFirst().textBackground !=
+          TextBackground::Outline) {
+    error = QStringLiteral("Outlined text came back as a different style");
+    return false;
+  }
+  return true;
+}
+
 /** The draft's native caret is hidden; QPlainTextEdit actually reads cursorWidth. */
 bool runNativeCaretHiddenCheck(QApplication &application, QString &error) {
   CaptureData capture;
@@ -4480,25 +4565,27 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // T again (tool still armed) switches the next text to plain.
+  // T twice more (tool still armed) cycles pill, outline, plain, so the next
+  // text lands on plain.
+  QTest::keyClick(&editor, Qt::Key_T);
   QTest::keyClick(&editor, Qt::Key_T);
   typeText(QPoint(300, 412), QStringLiteral("Plain"));
   const Annotation plain =
       text({200, 295}, QStringLiteral("Plain"), TextBackground::Plain);
   if (!snapshotMatches(expected({pill, plain}))) {
-    error = QStringLiteral("T again did not switch new text to plain");
+    error = QStringLiteral("T twice did not cycle new text to plain");
     return false;
   }
 
-  // T with a text layer selected toggles that layer, undoably.
+  // T with a text layer selected cycles that layer, undoably.
   QTest::keyClick(&editor, Qt::Key_V);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(310, 302));
   QTest::keyClick(&editor, Qt::Key_T);
   application.processEvents();
-  Annotation pillNowPlain = pill;
-  pillNowPlain.textBackground = TextBackground::Plain;
-  if (!snapshotMatches(expected({pillNowPlain, plain}))) {
-    error = QStringLiteral("T did not toggle the selected text's pill");
+  Annotation pillNowOutline = pill;
+  pillNowOutline.textBackground = TextBackground::Outline;
+  if (!snapshotMatches(expected({pillNowOutline, plain}))) {
+    error = QStringLiteral("T did not cycle the selected text's style");
     return false;
   }
   if (editor.cursor().shape() != Qt::ArrowCursor) {
@@ -6620,6 +6707,10 @@ int main(int argc, char **argv) {
   if (!runZoomOutCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 10;
+  }
+  if (!runTextOutlineCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 34;
   }
   if (!runNativeCaretHiddenCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

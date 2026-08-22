@@ -385,9 +385,28 @@ QString cornerName(qreal radius) {
                       : QStringLiteral("square corners");
 }
 
+TextBackground nextTextBackground(TextBackground background) {
+  switch (background) {
+  case TextBackground::Pill:
+    return TextBackground::Outline;
+  case TextBackground::Outline:
+    return TextBackground::Plain;
+  case TextBackground::Plain:
+    return TextBackground::Pill;
+  }
+  return TextBackground::Pill;
+}
+
 QString textBackgroundName(TextBackground background) {
-  return background == TextBackground::Pill ? QStringLiteral("Pill")
-                                            : QStringLiteral("Plain");
+  switch (background) {
+  case TextBackground::Pill:
+    return QStringLiteral("Pill");
+  case TextBackground::Outline:
+    return QStringLiteral("Outline");
+  case TextBackground::Plain:
+    return QStringLiteral("Plain");
+  }
+  return QStringLiteral("Pill");
 }
 
 QString redactionStyleName(RedactionStyle style) {
@@ -1580,19 +1599,15 @@ void CaptureEditor::toggleTextBackground() {
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
       annotations_.at(selectedAnnotation_).kind == Annotation::Kind::Text) {
     Annotation &text = annotations_[selectedAnnotation_];
-    text.textBackground = text.textBackground == TextBackground::Pill
-                              ? TextBackground::Plain
-                              : TextBackground::Pill;
-    setStatus(QStringLiteral("Selected text: %1 · T again toggles")
+    text.textBackground = nextTextBackground(text.textBackground);
+    setStatus(QStringLiteral("Selected text: %1 · T again cycles")
                   .arg(textBackgroundName(text.textBackground).toLower()));
     commitPatch({selectedAnnotation_});
     return;
   }
-  textBackground_ = textBackground_ == TextBackground::Pill
-                        ? TextBackground::Plain
-                        : TextBackground::Pill;
+  textBackground_ = nextTextBackground(textBackground_);
   selectedAnnotation_ = -1;
-  setStatus(QStringLiteral("Text: %1 · T again toggles")
+  setStatus(QStringLiteral("Text: %1 · T again cycles")
                 .arg(textBackgroundName(textBackground_).toLower()));
 }
 
@@ -2097,7 +2112,7 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
   add(36, QStringLiteral("tool-cut"), {},
       QStringLiteral("Cut out a band · X · drag across"));
   add(36, QStringLiteral("tool-text"), {},
-      QStringLiteral("Neucha text · T · %1 · %2 · T again toggles pill · Wheel")
+      QStringLiteral("Neucha text · T · %1 · %2 · T again cycles style · Wheel")
           .arg(QString::fromLatin1(
               kTextSizeNames.at(static_cast<std::size_t>(textSizeIndex_))))
           .arg(textBackgroundName(textBackground_)));
@@ -6059,7 +6074,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         if (tool_ == Tool::Text) {
           tooltip = QStringLiteral(
                         "Neucha · S  M  L · current %1 · Scroll wheel · %2 · T "
-                        "again toggles pill")
+                        "again cycles style")
                         .arg(QString::fromLatin1(kTextSizeNames.at(
                             static_cast<std::size_t>(textSizeIndex_))))
                         .arg(textBackgroundName(textBackground_));
