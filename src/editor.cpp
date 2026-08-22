@@ -6776,28 +6776,32 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     // a caret spanning the glyph box rather than the face's whole line height.
     const QRectF box = textEditor_->geometry();
     if (textEditPill_) {
-      // The widget stays a little taller than the text so QPlainTextEdit
-      // never scrolls the first line away, but the pill hugs the laid-out
-      // lines the way the committed layer's does, or the slack reads as a
-      // blank band under what is being typed. The origin is the first glyph,
-      // not the widget corner, so bundled faces stay inside the cream.
+      // The widget keeps typing slack (a 48px floor plus room for the next
+      // glyph), so its geometry cannot shape the pill. Rebuild the committed
+      // pill's rect from the draft text instead, so nothing shifts on commit.
+      // The origin is the first glyph, not the widget corner, so bundled
+      // faces stay inside the cream.
       QTextCursor start(textEditor_->document());
       start.setPosition(0);
-      const QPointF origin =
+      const QPointF glyphOrigin =
           QRectF(textEditor_->cursorRect(start))
               .translated(box.topLeft() + textEditor_->viewport()->pos())
               .topLeft();
       const QFontMetricsF pillMetrics(textEditor_->font());
+      qreal widest = 0.0;
+      const QStringList draftLines =
+          textEditor_->toPlainText().split(QLatin1Char('\n'));
+      for (const QString &line : draftLines)
+        widest = std::max(widest, pillMetrics.horizontalAdvance(line));
       const int lineCount =
           std::max(1, qRound(textEditor_->document()->size().height()));
       const qreal pad = std::max(4.0, pillMetrics.height() * 0.18);
-      const qreal glyphs = pillMetrics.height() +
-                           (lineCount - 1) * pillMetrics.lineSpacing();
-      const qreal hug = glyphs + pad +
-                        std::max(pad, pillMetrics.descent() + 2.0) -
-                        pillMetrics.descent();
-      const QRectF pill(origin, QSizeF(box.right() - origin.x(),
-                                       std::min(box.bottom() - origin.y(), hug)));
+      const QRectF glyphs(glyphOrigin.x(), glyphOrigin.y(), widest,
+                          pillMetrics.height() +
+                              (lineCount - 1) * pillMetrics.lineSpacing());
+      const QRectF pill = glyphs.adjusted(
+          -pad, -pad, pad,
+          std::max(pad, pillMetrics.descent() + 2.0) - pillMetrics.descent());
       const qreal radius = std::min(pill.height() / 4.0, 6.0);
       painter.setPen(Qt::NoPen);
       painter.setBrush(QColor(248, 245, 235));
