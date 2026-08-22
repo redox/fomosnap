@@ -98,6 +98,8 @@ struct Annotation {
   /// Typeface is a layer property so reopened and duplicated labels keep it.
   TextFont textFont = TextFont::Neucha;
   quint64 id = 0;
+  /// Wrap width for text layers in image px; 0 wraps at the canvas edge.
+  qreal textWidth = 0.0;
 
   bool operator==(const Annotation &) const = default;
 };
@@ -173,7 +175,20 @@ enum class AnnotationLayer { Redaction, Default };
                                          bool includeWindows, QString &error);
 /** Bounds of a text layer's glyph box, or of its readability pill when it
  *  has one; `start` is the baseline origin. */
-[[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation);
+/// Narrowest wrap width worth producing; below this a line would be a sliver,
+/// so the text stays on one line instead.
+inline constexpr qreal kMinimumTextWrapWidth = 48.0;
+/** Width a text layer wraps to: its own `textWidth`, else the room left
+ *  before the canvas' right edge (`canvasWidth`, 0 = unbounded). */
+[[nodiscard]] qreal annotationTextWrapWidth(const Annotation &annotation,
+                                            qreal canvasWidth);
+/** The display lines of a text layer: hard newlines first, then each of those
+ *  word-wrapped to annotationTextWrapWidth(). Text never runs off the capture
+ *  and past its own handle. */
+[[nodiscard]] QStringList annotationTextLines(const Annotation &annotation,
+                                              qreal canvasWidth = 0.0);
+[[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation,
+                                          qreal canvasWidth = 0.0);
 /** Same pill as `annotationTextBounds`, but for a live editor whose font and
  *  glyph origin are already in widget pixels. */
 [[nodiscard]] QRectF textLabelBounds(const QFont &font, const QString &text,
@@ -259,7 +274,8 @@ void describeFileCapture(CaptureData &capture, QImage image,
 [[nodiscard]] bool quickOutput(const QImage &image, QuickOutputMode mode,
                                QString &error);
 [[nodiscard]] bool copyTextToClipboard(const QString &text, QString &error);
-void paintAnnotation(QPainter &painter, const Annotation &annotation);
+void paintAnnotation(QPainter &painter, const Annotation &annotation,
+                     qreal canvasWidth = 0.0);
 [[nodiscard]] QPainterPath spotlightPath(const Annotation &annotation);
 void paintSpotlights(QPainter &painter, const QImage &source,
                      const QRectF &targetBounds, const QRectF &sourceRect,
