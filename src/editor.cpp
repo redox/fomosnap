@@ -38,7 +38,9 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QScrollBar>
+#include <QTextBlock>
 #include <QTextCursor>
+#include <QTextLayout>
 #include <QTextDocument>
 #include <QThread>
 #include <QTimer>
@@ -64,7 +66,9 @@ public:
     setFrameShape(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setWordWrapMode(QTextOption::NoWrap);
+    // Wrap like the committed text will: at word boundaries, anywhere within
+    // a word too long to fit. The width clamp decides when wrapping bites.
+    setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     document()->setDocumentMargin(0);
   }
   using QPlainTextEdit::cursorRect;
@@ -1109,8 +1113,15 @@ CaptureEditor::annotationHandles(const Annotation &annotation) const {
   const QRectF bounds = annotationBounds(annotation);
   // A text's handle is its wrap width, not its size: one handle, on the edge
   // the wrapping actually moves.
-  if (annotation.kind == Annotation::Kind::Text)
-    return {{bounds.bottomRight(), Interaction::ResizeEnd}};
+  if (annotation.kind == Annotation::Kind::Text) {
+    // Text moved or loaded past the canvas edge would put this handle out of
+    // reach, maybe off the screen itself; pull it back to the edge so the
+    // wrap can always be dragged back in.
+    QPointF handle = bounds.bottomRight();
+    if (selection_.width() > 0)
+      handle.setX(std::min(handle.x(), selection_.width() - 4.0));
+    return {{handle, Interaction::ResizeEnd}};
+  }
   // A counter is a disc: any corner sets its size, and sides would say
   // something about width and height that a disc cannot honour.
   if (annotation.kind == Annotation::Kind::Marker) {
@@ -3194,7 +3205,8 @@ void CaptureEditor::ensureTextEditor() {
     const int sidePadding =
         textEditPill_ ? qRound(std::max(4.0, metrics.height() * 0.18)) : 0;
     const int availableWidth =
-        std::max(48, qRound(editImageRect().right() - textEditor_->x()));
+        std::max(48, qRound(editImageRect().right()) - textEditor_->x() +
+                         sidePadding);
     // A dragged wrap width wins; otherwise the text wraps at the canvas
     // edge rather than running off it, where its handle is unreachable.
     const int desiredWidth =
@@ -6789,10 +6801,13 @@ void CaptureEditor::paintEdit(QPainter &painter) {
               .topLeft();
       const QFontMetricsF pillMetrics(textEditor_->font());
       qreal widest = 0.0;
-      const QStringList draftLines =
-          textEditor_->toPlainText().split(QLatin1Char('\n'));
-      for (const QString &line : draftLines)
-        widest = std::max(widest, pillMetrics.horizontalAdvance(line));
+      for (QTextBlock block = textEditor_->document()->begin();
+           block.isValid(); block = block.next()) {
+        QTextLayout *layout = block.layout();
+        for (int lineIndex = 0; lineIndex < layout->lineCount(); ++lineIndex)
+          widest = std::max(
+              widest, layout->lineAt(lineIndex).naturalTextWidth());
+      }
       const int lineCount =
           std::max(1, qRound(textEditor_->document()->size().height()));
       const qreal pad = std::max(4.0, pillMetrics.height() * 0.18);

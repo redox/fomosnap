@@ -1745,10 +1745,12 @@ bool runDraftPillStaysPutCheck(QApplication &application, QString &error) {
   // The pill is the only cream ink over a white capture, so its bounding box
   // before and after the committing click is the whole contract: any drift
   // means the background jumps when typing ends.
-  const auto creamBounds = [](const QImage &frame) {
+  const auto creamBounds = [](const QImage &frame, const QRect &region) {
     QRect bounds;
-    for (int y = 0; y < frame.height(); ++y)
-      for (int x = 0; x < frame.width(); ++x) {
+    for (int y = region.top(); y <= region.bottom(); ++y)
+      for (int x = region.left(); x <= region.right(); ++x) {
+        if (!frame.rect().contains(x, y))
+          continue;
         const QColor color = frame.pixelColor(x, y);
         if (std::abs(color.red() - 248) <= 3 &&
             std::abs(color.green() - 245) <= 3 &&
@@ -1757,10 +1759,12 @@ bool runDraftPillStaysPutCheck(QApplication &application, QString &error) {
       }
     return bounds;
   };
-  const QRect draftPill = creamBounds(editor.grab().toImage());
+  const QRect wholeCanvas(0, 0, 800, 600);
+  const QRect draftPill = creamBounds(editor.grab().toImage(), wholeCanvas);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(550, 200));
   application.processEvents();
-  const QRect committedPill = creamBounds(editor.grab().toImage());
+  const QRect committedPill =
+      creamBounds(editor.grab().toImage(), wholeCanvas);
   if (draftPill.isNull() || committedPill.isNull()) {
     error = QStringLiteral("Could not find the cream pill in a frame");
     return false;
@@ -1774,6 +1778,165 @@ bool runDraftPillStaysPutCheck(QApplication &application, QString &error) {
                 .arg(draftPill.width()).arg(draftPill.height())
                 .arg(committedPill.x()).arg(committedPill.y())
                 .arg(committedPill.width()).arg(committedPill.height());
+    return false;
+  }
+
+  // A draft typed toward the right edge wraps there while typing, and the
+  // committed pill lands exactly on the wrapped draft's pill. The scan region
+  // keeps the first annotation's pill out of the comparison.
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 355));
+  application.processEvents();
+  draft = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+  if (!draft) {
+    error = QStringLiteral("Second text draft did not open");
+    return false;
+  }
+  QTest::keyClicks(
+      draft, QStringLiteral("wrap wrap wrap wrap wrap wrap wrap wrap wrap"));
+  application.processEvents();
+  const QRect wrapRegion(300, 330, 500, 230);
+  const QRect wrappedDraftPill =
+      creamBounds(editor.grab().toImage(), wrapRegion);
+  const QFontMetricsF wrapMetrics(draft->font());
+  if (wrappedDraftPill.height() < wrapMetrics.lineSpacing() * 1.6) {
+    error = QStringLiteral("Draft did not wrap at the canvas edge while typing");
+    return false;
+  }
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(550, 150));
+  application.processEvents();
+  const QRect wrappedCommittedPill =
+      creamBounds(editor.grab().toImage(), wrapRegion);
+  if (std::abs(wrappedDraftPill.left() - wrappedCommittedPill.left()) > 1 ||
+      std::abs(wrappedDraftPill.top() - wrappedCommittedPill.top()) > 1 ||
+      std::abs(wrappedDraftPill.right() - wrappedCommittedPill.right()) > 1 ||
+      std::abs(wrappedDraftPill.bottom() - wrappedCommittedPill.bottom()) > 1) {
+    error = QStringLiteral(
+                "Wrapped pill moved on commit: draft %1,%2 %3x%4 vs %5,%6 %7x%8")
+                .arg(wrappedDraftPill.x()).arg(wrappedDraftPill.y())
+                .arg(wrappedDraftPill.width()).arg(wrappedDraftPill.height())
+                .arg(wrappedCommittedPill.x()).arg(wrappedCommittedPill.y())
+                .arg(wrappedCommittedPill.width())
+                .arg(wrappedCommittedPill.height());
+    return false;
+  }
+  return true;
+}
+
+/** A text layer pushed past the canvas edge keeps a reachable wrap handle,
+ *  and the handle drag stops at the canvas edge. */
+bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  // A frozen width far past the canvas edge, straight from a stored log, is
+  // the state a move or an old capture can produce.
+  const QRectF selection(100, 100, 550, 370);
+  const qreal ascent = QFontMetricsF(annotationTextFont(5.0)).ascent();
+  Annotation text;
+  text.kind = Annotation::Kind::Text;
+  text.start = QPointF(60, 145 + ascent);
+  text.text = QStringLiteral("wrap wrap wrap wrap wrap wrap wrap wrap wrap wrap");
+  text.color = QColor(QStringLiteral("#ff375f"));
+  text.size = 5;
+  text.textWidth = 900.0;
+  text.id = 1;
+  OperationLog log;
+  Operation cropOp;
+  cropOp.type = Operation::Type::Crop;
+  cropOp.crop = selection;
+  log.ops.push_back(cropOp);
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {text};
+  log.ops.push_back(std::move(annotate));
+  log.index = log.ops.size();
+  log.nextId = 2;
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                       QuickOutputMode::None, log);
+  editor.setSuppressSnapshots(true);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+
+  // Derive the display mapping from the rendered glyphs themselves: the only
+  // red ink below the toolbar is this one line of text with known bounds.
+  const auto inkBounds = [&editor] {
+    const QImage frame = editor.grab().toImage();
+    QRect bounds;
+    for (int y = 90; y < 560; ++y)
+      for (int x = 0; x < frame.width(); ++x) {
+        const QColor color = frame.pixelColor(x, y);
+        if (color.red() > 200 && color.green() < 120)
+          bounds |= QRect(x, y, 1, 1);
+      }
+    return bounds;
+  };
+  const QRect ink = inkBounds();
+  const QFontMetricsF metrics(annotationTextFont(5.0));
+  if (ink.isNull() ||
+      ink.width() < metrics.horizontalAdvance(text.text) * 0.5) {
+    error = QStringLiteral("Overrun text did not render for the handle check");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ink.center());
+  application.processEvents();
+
+  // The layer's own corner is far off the canvas, maybe off the screen; the
+  // handle waits at the canvas edge instead. Sweep a neighborhood around
+  // where the edge must be (the ink locates the layer, the display scale is
+  // near one) until the hover cursor says resize; never finding it is
+  // exactly the bug this guards.
+  const int guessX = std::min(
+      790, ink.left() + qRound(selection.width() - 4.0 - text.start.x()));
+  const int guessY = ink.bottom() + 6;
+  QPoint handleSpot;
+  for (int gy = guessY - 24; gy <= guessY + 24 && handleSpot.isNull(); gy += 4)
+    for (int gx = guessX - 60; gx <= std::min(795, guessX + 80); gx += 4) {
+      QTest::mouseMove(&editor, QPoint(gx, gy), 20);
+      application.processEvents();
+      if (editor.cursor().shape() == Qt::SizeHorCursor) {
+        handleSpot = QPoint(gx, gy);
+        break;
+      }
+    }
+  if (handleSpot.isNull()) {
+    error = QStringLiteral("Overrun text's wrap handle was out of reach");
+    return false;
+  }
+
+  // Dragging the handle right stops at the canvas edge (drag points clamp to
+  // the selection), so the text must wrap there rather than follow the
+  // pointer out. Two ink lines say the width stopped at the edge; the frozen
+  // 900 (or anything past the full line) would keep one.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handleSpot);
+  const QPoint wayRight(std::min(795, handleSpot.x() + 120), handleSpot.y());
+  QTest::mouseMove(&editor, wayRight, 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, wayRight);
+  application.processEvents();
+  const QRect after = inkBounds();
+  int bands = 0;
+  bool inBand = false;
+  const QImage frame = editor.grab().toImage();
+  for (int y = after.top(); y <= after.bottom(); ++y) {
+    bool rowInk = false;
+    for (int x = after.left(); x <= after.right() && !rowInk; ++x) {
+      const QColor color = frame.pixelColor(x, y);
+      rowInk = color.red() > 200 && color.green() < 120;
+    }
+    bands += rowInk && !inBand ? 1 : 0;
+    inBand = rowInk;
+  }
+  if (bands < 2) {
+    error = QStringLiteral("Handle drag past the edge did not stop there");
     return false;
   }
   return true;
@@ -8378,6 +8541,10 @@ int main(int argc, char **argv) {
   if (!runDraftPillStaysPutCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 12;
+  }
+  if (!runTextOverrunHandleCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 35;
   }
   if (!runTextClickAwayCommitCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
