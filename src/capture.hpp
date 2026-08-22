@@ -53,7 +53,7 @@ enum class QuickOutputMode { None, Copy, Save, Both };
 
 enum class SpotlightShape { Ellipse, Rectangle, RoundedRectangle };
 enum class RedactionStyle { Solid, Pixelate };
-enum class TextBackground { Plain, Pill };
+enum class TextBackground { Plain, Pill, Outline };
 
 struct Annotation {
   enum class Kind {

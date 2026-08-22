@@ -313,6 +313,21 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   painter.setBrush(Qt::NoBrush);
   const QFontMetricsF metrics(font);
   const QStringList lines = annotation.text.split('\n');
+  if (annotation.textBackground == TextBackground::Outline) {
+    // A white halo whatever the color: screenshots are mostly light UI, where
+    // a dark halo reads as a drop shadow rather than a cut-out, and white
+    // holds any palette color together over a busy background.
+    QPainterPath glyphs;
+    for (qsizetype index = 0; index < lines.size(); ++index)
+      glyphs.addText(annotation.start +
+                         QPointF(0, index * metrics.lineSpacing()),
+                     font, lines.at(index));
+    painter.setPen(QPen(QColor(255, 255, 255, 235), font.pixelSize() * 0.17,
+                        Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.drawPath(glyphs);
+    painter.fillPath(glyphs, annotation.color);
+    return;
+  }
   for (qsizetype index = 0; index < lines.size(); ++index)
     painter.drawText(annotation.start + QPointF(0, index * metrics.lineSpacing()),
                      lines.at(index));
@@ -1263,8 +1278,10 @@ QJsonObject annotationToJson(const Annotation &annotation) {
     object.insert(QStringLiteral("filled"), true);
   if (annotation.cornerRadius > 0.0)
     object.insert(QStringLiteral("cornerRadius"), annotation.cornerRadius);
-  if (annotation.textBackground != TextBackground::Pill)
+  if (annotation.textBackground == TextBackground::Plain)
     object.insert(QStringLiteral("textBackground"), QStringLiteral("plain"));
+  else if (annotation.textBackground == TextBackground::Outline)
+    object.insert(QStringLiteral("textBackground"), QStringLiteral("outline"));
   if (annotation.kind == Annotation::Kind::Spotlight) {
     object.insert(QStringLiteral("magnification"), annotation.magnification);
     object.insert(QStringLiteral("spotlightShape"),
@@ -1306,11 +1323,12 @@ bool annotationFromJson(const QJsonObject &object, Annotation &annotation,
   annotation.filled = object.value(QStringLiteral("filled")).toBool(false);
   annotation.cornerRadius =
       object.value(QStringLiteral("cornerRadius")).toDouble(0.0);
+  const QString textBackground =
+      object.value(QStringLiteral("textBackground")).toString();
   annotation.textBackground =
-      object.value(QStringLiteral("textBackground")).toString() ==
-              QStringLiteral("plain")
-          ? TextBackground::Plain
-          : TextBackground::Pill;
+      textBackground == QStringLiteral("plain")    ? TextBackground::Plain
+      : textBackground == QStringLiteral("outline") ? TextBackground::Outline
+                                                    : TextBackground::Pill;
   annotation.magnification =
       object.value(QStringLiteral("magnification")).toDouble(2.0);
   const QString spotlightShape =
