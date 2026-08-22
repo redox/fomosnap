@@ -1877,6 +1877,11 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
 
   const Annotation toolbar =
       textAnnotation({325, 180}, QStringLiteral("Toolbar"));
+  // The committing click above did only that; a second click opens the next
+  // editor, with the text tool still armed.
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(450, 300));
+  application.processEvents();
   // The arrow button sits in the spaced toolbar above the capture.
   QTest::keyClicks(QApplication::focusWidget(), toolbar.text);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
@@ -5454,6 +5459,106 @@ bool runTextFontSmoke(QApplication &application, QString &error) {
 }
 
 /** Runs the interaction and rendering smoke checks. */
+/** Checks text wrapping: a long line breaks at the wrap width, hard newlines
+ *  survive alongside it, a word too long for the width breaks mid-word rather
+ *  than running off, and a bounds box follows the wrapped shape. */
+bool runTextWrapRenderingCheck(QString &error) {
+  error = QStringLiteral("Text wrap rendering check failed");
+  Annotation text;
+  text.kind = Annotation::Kind::Text;
+  text.start = {20, 40};
+  text.color = QColor(QStringLiteral("#ff375f"));
+  text.size = 5;
+  text.text = QStringLiteral("the quick brown fox jumps over the lazy dog");
+
+  // Unbounded: one line, however long it is.
+  if (annotationTextLines(text, 0.0).size() != 1) {
+    error = QStringLiteral("Unbounded text did not stay on one line");
+    return false;
+  }
+
+  // A dragged width breaks it into several.
+  text.textWidth = 120.0;
+  const QStringList wrapped = annotationTextLines(text, 0.0);
+  if (wrapped.size() < 2) {
+    error = QStringLiteral("Text did not wrap at its dragged width");
+    return false;
+  }
+  const QFontMetricsF metrics(annotationTextFont(text.size));
+  for (const QString &line : wrapped) {
+    if (metrics.horizontalAdvance(line) > 120.0) {
+      error = QStringLiteral("A wrapped line ran past the wrap width");
+      return false;
+    }
+  }
+
+  // The bounds follow the wrapped shape rather than the unwrapped run.
+  const QRectF box = annotationTextBounds(text, 0.0);
+  if (box.width() > 120.0 + 2 * std::max(4.0, metrics.height() * 0.18) + 1.0) {
+    error = QStringLiteral("Wrapped text bounds kept the unwrapped width");
+    return false;
+  }
+
+  // Hard newlines still split, and wrapping applies within each paragraph.
+  text.text = QStringLiteral("one\ntwo three four five six seven eight nine");
+  const QStringList mixed = annotationTextLines(text, 0.0);
+  if (mixed.size() < 3 || mixed.first() != QStringLiteral("one")) {
+    error = QStringLiteral("Hard newlines did not survive wrapping");
+    return false;
+  }
+
+  // A single word wider than the wrap width breaks rather than overflowing.
+  text.text = QStringLiteral("supercalifragilisticexpialidocious");
+  for (const QString &line : annotationTextLines(text, 0.0)) {
+    if (metrics.horizontalAdvance(line) > 120.0) {
+      error = QStringLiteral("An over-long word ran past the wrap width");
+      return false;
+    }
+  }
+
+  // With no width of its own, text wraps at the canvas edge instead.
+  text.textWidth = 0.0;
+  text.text = QStringLiteral("the quick brown fox jumps over the lazy dog");
+  if (annotationTextLines(text, 200.0).size() < 2) {
+    error = QStringLiteral("Text did not wrap at the canvas edge");
+    return false;
+  }
+
+  // And the painted pixels wrap, not just the layout: rendered at a dragged
+  // width, ink appears on a second line and never past the wrap width. The
+  // layout helpers wrapping while the painter split on newlines is exactly
+  // the break this would have caught.
+  CaptureData capture;
+  capture.monitor.scale = 1.0;
+  capture.monitor.pixelSize = {400, 200};
+  capture.source = QImage(400, 200, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(Qt::transparent);
+  capture.previewSize = capture.source.size();
+  Annotation painted = text;
+  painted.start = {20, 40};
+  painted.textWidth = 120.0;
+  painted.textBackground = TextBackground::Plain;
+  const QImage out = renderCapture(capture, QRectF(0, 0, 400, 200), {painted},
+                                   BackgroundStyle::None);
+  const QFontMetricsF painterMetrics(annotationTextFont(painted.size));
+  bool secondLineInk = false;
+  const int secondBaseline = qRound(40 + painterMetrics.lineSpacing());
+  for (int x = 20; x < 140 && !secondLineInk; ++x)
+    secondLineInk = out.pixelColor(x, secondBaseline - 2).alpha() > 0;
+  if (!secondLineInk) {
+    error = QStringLiteral("Rendered text did not paint a wrapped second line");
+    return false;
+  }
+  for (int x = 170; x < 400; ++x) {
+    if (out.pixelColor(x, qRound(40 - painterMetrics.ascent() / 2)).alpha() >
+        0) {
+      error = QStringLiteral("Rendered text ran past its wrap width");
+      return false;
+    }
+  }
+  return true;
+}
+
 bool runTextPillRenderingCheck(QString &error) {
   error = QStringLiteral("Text pill rendering check failed");
   CaptureData capture;
@@ -8258,6 +8363,10 @@ int main(int argc, char **argv) {
   if (!runTextFontSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 128;
+  }
+  if (!runTextWrapRenderingCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 125;
   }
   if (!runTextPillRenderingCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;

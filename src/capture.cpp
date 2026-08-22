@@ -93,13 +93,79 @@ QRectF textLabelBounds(const QFont &font, const QString &text,
   return glyphs.adjusted(-pad, -pad, pad, bottom - metrics.descent());
 }
 
-QRectF annotationTextBounds(const Annotation &annotation) {
-  const QFont font = annotationTextFont(annotation.size, annotation.textFont);
-  const QFontMetricsF metrics(font);
-  return textLabelBounds(
-      font, annotation.text,
-      {annotation.start.x(), annotation.start.y() - metrics.ascent()},
-      annotation.textBackground);
+qreal annotationTextWrapWidth(const Annotation &annotation,
+                              qreal canvasWidth) {
+  if (annotation.textWidth > 0.0)
+    return annotation.textWidth;
+  if (canvasWidth <= 0.0)
+    return 0.0;
+  // Room left before the right edge. Narrower than this and the text would be
+  // wrapping to a sliver, so leave it on one line and let it run.
+  const qreal room = canvasWidth - annotation.start.x();
+  return room >= kMinimumTextWrapWidth ? room : 0.0;
+}
+
+QStringList annotationTextLines(const Annotation &annotation,
+                                qreal canvasWidth) {
+  const QStringList paragraphs = annotation.text.split('\n');
+  const qreal wrap = annotationTextWrapWidth(annotation, canvasWidth);
+  if (wrap <= 0.0)
+    return paragraphs;
+  const QFontMetricsF metrics(
+      annotationTextFont(annotation.size, annotation.textFont));
+  QStringList lines;
+  for (const QString &paragraph : paragraphs) {
+    if (metrics.horizontalAdvance(paragraph) <= wrap) {
+      lines.push_back(paragraph);
+      continue;
+    }
+    // Break on spaces, and only mid-word when a single word cannot fit, so a
+    // long URL still wraps instead of running off the capture.
+    QString line;
+    for (const QString &word : paragraph.split(' ')) {
+      const QString candidate = line.isEmpty() ? word : line + ' ' + word;
+      if (metrics.horizontalAdvance(candidate) <= wrap) {
+        line = candidate;
+        continue;
+      }
+      if (!line.isEmpty()) {
+        lines.push_back(line);
+        line.clear();
+      }
+      QString rest = word;
+      while (metrics.horizontalAdvance(rest) > wrap && rest.size() > 1) {
+        int fit = 1;
+        while (fit < rest.size() &&
+               metrics.horizontalAdvance(rest.left(fit + 1)) <= wrap)
+          ++fit;
+        lines.push_back(rest.left(fit));
+        rest = rest.mid(fit);
+      }
+      line = rest;
+    }
+    lines.push_back(line);
+  }
+  return lines;
+}
+
+QRectF annotationTextBounds(const Annotation &annotation, qreal canvasWidth) {
+  const QFontMetricsF metrics(
+      annotationTextFont(annotation.size, annotation.textFont));
+  const QStringList lines = annotationTextLines(annotation, canvasWidth);
+  qreal widestLine = 0.0;
+  for (const QString &line : lines)
+    widestLine = std::max(widestLine, metrics.horizontalAdvance(line));
+  const QRectF glyphs(
+      annotation.start.x(), annotation.start.y() - metrics.ascent(), widestLine,
+      metrics.height() +
+          std::max<qsizetype>(0, lines.size() - 1) * metrics.lineSpacing());
+  if (annotation.textBackground != TextBackground::Pill)
+    return glyphs;
+  // The pill has even side/top padding and a bottom pad that grows with the
+  // descender, so commas and tails stay inside the cream.
+  const qreal pad = std::max<qreal>(4.0, metrics.height() * 0.18);
+  const qreal bottom = std::max(pad, metrics.descent() + 2.0);
+  return glyphs.adjusted(-pad, -pad, pad, bottom - metrics.descent());
 }
 
 QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
@@ -135,7 +201,8 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
     if (annotation.kind == Annotation::Kind::Redaction)
       return QRectF();
     if (annotation.kind == Annotation::Kind::Text)
-      return annotationTextBounds(annotation).adjusted(-1, -1, 1, 1);
+      return annotationTextBounds(annotation, sourceFrameSize.width())
+          .adjusted(-1, -1, 1, 1);
     if (annotation.kind == Annotation::Kind::Marker) {
       const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
       const qreal antialias =
@@ -333,7 +400,8 @@ QString screenshotTargetPath(QString &error, const QString &appSlug) {
   return path;
 }
 
-void drawAnnotation(QPainter &painter, const Annotation &annotation) {
+void drawAnnotation(QPainter &painter, const Annotation &annotation,
+                    qreal canvasWidth = 0.0) {
   // Redactions replace source pixels in renderCapture before ordinary vector
   // annotations are painted. They must never be approximated by a translucent
   // overlay here because that could leave recoverable source data in exports.
@@ -441,7 +509,7 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   if (annotation.textBackground == TextBackground::Pill) {
     // A cream pill under the glyphs keeps text readable on any capture or
     // shape beneath it (the default text background).
-    const QRectF pill = annotationTextBounds(annotation);
+    const QRectF pill = annotationTextBounds(annotation, canvasWidth);
     const qreal radius = std::min(pill.height() / 4.0, 6.0);
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(248, 245, 235));
@@ -451,7 +519,7 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
   painter.setPen(annotation.color);
   painter.setBrush(Qt::NoBrush);
   const QFontMetricsF metrics(font);
-  const QStringList lines = annotation.text.split('\n');
+  const QStringList lines = annotationTextLines(annotation, canvasWidth);
   if (annotation.textBackground == TextBackground::Outline) {
     // A white halo whatever the color: screenshots are mostly light UI, where
     // a dark halo reads as a drop shadow rather than a cut-out, and white
@@ -628,8 +696,9 @@ QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
 
 } // namespace
 
-void paintAnnotation(QPainter &painter, const Annotation &annotation) {
-  drawAnnotation(painter, annotation);
+void paintAnnotation(QPainter &painter, const Annotation &annotation,
+                     qreal canvasWidth) {
+  drawAnnotation(painter, annotation, canvasWidth);
 }
 
 QPainterPath spotlightPath(const Annotation &annotation) {
@@ -734,7 +803,7 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
   const auto passOver = [&](bool (*belongs)(Annotation::Kind)) {
     for (const Annotation &annotation : annotations) {
       if (belongs(annotation.kind))
-        paintAnnotation(painter, annotation);
+        paintAnnotation(painter, annotation, logicalBounds.right());
     }
   };
   passOver([](Annotation::Kind kind) {
@@ -1575,6 +1644,8 @@ QJsonObject annotationToJson(const Annotation &annotation) {
   object.insert(QStringLiteral("color"),
                 annotation.color.name(QColor::HexArgb));
   object.insert(QStringLiteral("size"), annotation.size);
+  if (annotation.kind == Annotation::Kind::Text)
+    object.insert(QStringLiteral("textWidth"), annotation.textWidth);
   if (!annotation.text.isEmpty())
     object.insert(QStringLiteral("text"), annotation.text);
   if (annotation.kind == Annotation::Kind::Text)
@@ -1631,6 +1702,8 @@ bool annotationFromJson(const QJsonObject &object, Annotation &annotation,
   annotation.color = QColor(object.value(QStringLiteral("color")).toString());
   annotation.size = object.value(QStringLiteral("size")).toDouble(4.0);
   annotation.text = object.value(QStringLiteral("text")).toString();
+  annotation.textWidth =
+      object.value(QStringLiteral("textWidth")).toDouble(0.0);
   annotation.textFont = textFontFromStyleName(
       object.value(QStringLiteral("textFont")).toString());
   annotation.number = object.value(QStringLiteral("number")).toInt();
