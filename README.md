@@ -109,14 +109,13 @@ indefinitely.
 
 ```bash
 brew tap redox/tap
-brew install --HEAD fomosnap
+brew install fomosnap
 ```
 
-`--HEAD` builds from the tip of `main`. Once a `v*` tag is cut, the formula
-gains a stable `url`/`sha256` and plain `brew install fomosnap` works.
-
-To pick up new commits, `--fetch-HEAD` is required — without it Homebrew reuses
-its cached clone and reinstalls the same commit it already built:
+That builds the latest tagged release. To track `main` instead, use
+`brew install --HEAD fomosnap` — and note that upgrading a `--HEAD` install
+needs `--fetch-HEAD`, or Homebrew reuses its cached clone and rebuilds the same
+commit:
 
 ```bash
 brew upgrade --fetch-HEAD fomosnap
