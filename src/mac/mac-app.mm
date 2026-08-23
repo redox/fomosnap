@@ -136,7 +136,12 @@ bool setLaunchAtLogin(bool enabled, QString &error) {
         "Launch at login needs the bundled FOMOsnap.app, not a bare binary");
     return false;
   }
-  SMAppService *service = [SMAppService mainAppService];
+  // The agent service, not the main app service: registering the app itself
+  // would have launched it at login with no arguments, which means an
+  // ordinary capture -- a selection overlay across the screen at login. The
+  // bundled LaunchAgent plist names --agent instead.
+  SMAppService *service = [SMAppService
+      agentServiceWithPlistName:@FOMOSNAP_AGENT_PLIST_NAME];
   NSError *failure = nil;
   const BOOL succeeded = enabled
                              ? [service registerAndReturnError:&failure]
@@ -155,7 +160,8 @@ bool setLaunchAtLogin(bool enabled, QString &error) {
 bool launchesAtLogin() {
   if (!isBundled())
     return false;
-  return [SMAppService mainAppService].status == SMAppServiceStatusEnabled;
+  return [SMAppService agentServiceWithPlistName:@FOMOSNAP_AGENT_PLIST_NAME]
+             .status == SMAppServiceStatusEnabled;
 }
 
 } // namespace mac

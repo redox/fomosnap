@@ -18,6 +18,16 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
 # it, not to the path, so changing it makes the user re-approve FOMOsnap.
 set(FOMOSNAP_BUNDLE_ID "com.fomosnap.FOMOsnap" CACHE STRING "Bundle identifier")
 
+# The login item is a LaunchAgent inside the bundle, so it can name --agent.
+set(FOMOSNAP_APP_NAME "FOMOsnap")
+set(FOMOSNAP_AGENT_LABEL "${FOMOSNAP_BUNDLE_ID}.agent")
+set(FOMOSNAP_AGENT_PLIST
+  "${CMAKE_CURRENT_BINARY_DIR}/${FOMOSNAP_AGENT_LABEL}.plist")
+configure_file(packaging/LaunchAgent.plist.in "${FOMOSNAP_AGENT_PLIST}" @ONLY)
+set_source_files_properties("${FOMOSNAP_AGENT_PLIST}" PROPERTIES
+  MACOSX_PACKAGE_LOCATION "Library/LaunchAgents"
+  GENERATED TRUE)
+
 set(FOMOSNAP_MAC_SOURCES
   src/mac/mac-platform.hpp
   src/mac/mac-window.hpp
@@ -82,6 +92,8 @@ target_include_directories(fomosnap-core PUBLIC
   "${CMAKE_CURRENT_BINARY_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
+target_compile_definitions(fomosnap-core PRIVATE
+  FOMOSNAP_AGENT_PLIST_NAME="${FOMOSNAP_AGENT_LABEL}.plist")
 target_compile_features(fomosnap-core PUBLIC cxx_std_23)
 target_compile_options(fomosnap-core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(fomosnap-core PUBLIC
@@ -106,9 +118,11 @@ set_source_files_properties("${FOMOSNAP_ICON}" PROPERTIES
   MACOSX_PACKAGE_LOCATION "Resources")
 
 qt_add_executable(fomosnap MACOSX_BUNDLE
-  src/main.cpp src/pin.cpp src/pin.hpp "${FOMOSNAP_ICON}")
+  src/main.cpp src/pin.cpp src/pin.hpp "${FOMOSNAP_ICON}"
+  "${FOMOSNAP_AGENT_PLIST}")
 target_compile_options(fomosnap PRIVATE -Wall -Wextra -Wpedantic)
-target_compile_definitions(fomosnap PRIVATE FOMOSNAP_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(fomosnap PRIVATE
+  FOMOSNAP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fomosnap PRIVATE fomosnap-core)
 set_target_properties(fomosnap PROPERTIES
   OUTPUT_NAME "FOMOsnap"

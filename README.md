@@ -36,9 +36,9 @@ global hotkey were rewritten against macOS frameworks.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
 - Pin a finished capture as a bottom-right always-on-top window, launched
-  from the same `omasnap` executable and visible on every Space.
+  from the same `fomosnap` executable and visible on every Space.
 - Crash-resistant working documents under a private
-  `~/Library/Application Support/omasnap/`: the original source image plus a
+  `~/Library/Application Support/fomosnap/`: the original source image plus a
   sidecar JSON operation log. Undo still works after a crash or `--file`
   reopen. Saving and copying write a normal flattened PNG to the clipboard or
   `~/Pictures/Screenshots`.
@@ -77,9 +77,9 @@ it feeds is intact.
 
 ### Permissions
 
-Omasnap asks for **Screen Recording** the first time it captures. macOS cannot
+FOMOsnap asks for **Screen Recording** the first time it captures. macOS cannot
 grant this to a running process, so the first run explains, opens System
-Settings, and exits — grant it there and start Omasnap again.
+Settings, and exits — grant it there and start FOMOsnap again.
 
 The permission is attached to the app's code signature, not its path. A local
 rebuild changes that signature, so macOS may ask again after one.
@@ -121,36 +121,54 @@ cd fomosnap
 make install
 ```
 
-That builds `Omasnap.app` and installs it to `/Applications`. Set `PREFIX` to
+That builds `FOMOsnap.app` and installs it to `/Applications`. Set `PREFIX` to
 install elsewhere.
 
-For a command-line entry point, link the executable inside the bundle:
+For a command-line entry point, write a wrapper that execs the executable
+inside the bundle:
 
 ```bash
-ln -s /Applications/Omasnap.app/Contents/MacOS/Omasnap /usr/local/bin/omasnap
+printf '#!/bin/bash\nexec "/Applications/FOMOsnap.app/Contents/MacOS/FOMOsnap" "$@"\n' \
+  | sudo tee /usr/local/bin/fomosnap >/dev/null
+sudo chmod +x /usr/local/bin/fomosnap
 ```
 
-Invoking that symlink still runs the bundled app, which is what keeps the
-Screen Recording grant valid.
+A wrapper rather than a symlink, deliberately. Launched through a symlink, dyld
+reports the symlink as the executable path, so `+[NSBundle mainBundle]` finds no
+bundle at all — which silently disables notifications and `--install-agent`.
+`exec`ing the real path keeps the bundle identity, and with it the Screen
+Recording grant.
 
 ### The resident agent and its hotkey
 
-macOS has no compositor config to bind a key in, so Omasnap can hold one
+macOS has no compositor config to bind a key in, so FOMOsnap can hold one
 itself. The agent stays resident with no Dock icon, registers a system-wide
 shortcut, and shows the overlay with no launch cost, because Qt is already warm.
 
+**The default shortcut is `Ctrl+Cmd+4`.** `Cmd+Shift+3/4/5` all belong to the
+system screenshot tool, so the obvious keys were not available.
+
 ```bash
-omasnap --agent                          # foreground, default ctrl+cmd+4
-omasnap --agent --hotkey cmd+shift+2     # any modifier+key combination
-omasnap --install-agent                  # start it at login
-omasnap --uninstall-agent                # stop starting it at login
+fomosnap --agent                          # foreground, to try it
+fomosnap --agent --hotkey cmd+shift+2     # any modifier+key combination
+fomosnap --install-agent                  # start it at login
+fomosnap --uninstall-agent                # stop starting it at login
 ```
 
-`OMASNAP_HOTKEY` sets the default. The key toggles: press once to open the
-overlay, again to dismiss it. `Cmd+Shift+3/4/5` are already taken by the system
-screenshot tool, so pick something else.
+`FOMOSNAP_HOTKEY` sets the default. The key toggles: press once to open the
+overlay, again to dismiss it.
 
-Prefer your own launcher? Skip the agent entirely and bind `omasnap` in Raycast,
+`--install-agent` registers a LaunchAgent that ships inside the bundle, through
+`SMAppService`, so it appears in **System Settings > General > Login Items** and
+can be turned off there. It refers to the executable by a bundle-relative path,
+so the login item survives the app moving — which it does on every Homebrew
+upgrade, since the Cellar path carries the version.
+
+The plist names `--agent` explicitly. Registering the *app* as a login item
+instead would launch it at login with no arguments, which means an ordinary
+capture: a selection overlay across the screen the moment you log in.
+
+Prefer your own launcher? Skip the agent entirely and bind `fomosnap` in Raycast,
 Shortcuts, or Karabiner. Every capture is a normal process launch.
 
 ## CLI capture modes
@@ -158,25 +176,25 @@ Shortcuts, or Karabiner. Every capture is a normal process launch.
 Running without arguments opens freeform region selection:
 
 ```bash
-omasnap
+fomosnap
 ```
 
 Explicit starting modes:
 
 ```bash
-omasnap --capture-region
-omasnap --capture-window
-omasnap --capture-fullscreen
+fomosnap --capture-region
+fomosnap --capture-window
+fomosnap --capture-fullscreen
 ```
 
 Scroll capture stitches a region that is taller (or wider) than the screen:
 
 ```bash
-omasnap --scroll
+fomosnap --scroll
 ```
 
 Drag a region, then pick a direction: **Scroll ↓ / →** scrolls the page
-yourself while omasnap captures each step, and **Auto ↓ / →** scrolls it for
+yourself while fomosnap captures each step, and **Auto ↓ / →** scrolls it for
 you, one acknowledged notch at a time, stopping when the page stops moving.
 The frames are aligned and stitched into one image and opened in the editor,
 where `Ctrl`+wheel zooms and the wheel scrolls it.
@@ -184,10 +202,10 @@ where `Ctrl`+wheel zooms and the wheel scrolls it.
 Compatibility positional names are also accepted:
 
 ```bash
-omasnap region
-omasnap windows
-omasnap fullscreen
-omasnap smart       # maps to region selection
+fomosnap region
+fomosnap windows
+fomosnap fullscreen
+fomosnap smart       # maps to region selection
 ```
 
 These options choose what is initially selected; the editor still controls whether the
@@ -201,7 +219,7 @@ fullscreen captures output immediately. Quick output cannot be combined with `--
 ### One instance, toggled by the same hotkey
 
 Only one capture overlay runs at a time, guarded by a lock file in the runtime snapshot
-directory. Starting omasnap while an overlay is open sends the running instance `SIGTERM`,
+directory. Starting fomosnap while an overlay is open sends the running instance `SIGTERM`,
 which it handles with a clean Qt shutdown; the new process then exits without capturing.
 Pressing `PRINT` therefore opens the overlay and pressing it again dismisses it.
 
@@ -228,41 +246,41 @@ Exit codes:
 
 ### Edit an existing or clipboard image
 
-Point omasnap at any readable image and it opens straight into the annotation editor
+Point fomosnap at any readable image and it opens straight into the annotation editor
 with the whole image selected, skipping the screen-capture step:
 
 ```bash
-omasnap ~/Pictures/Screenshots/screenshot-2026-08-11_10-00-00.png
+fomosnap ~/Pictures/Screenshots/screenshot-2026-08-11_10-00-00.png
 # or
-omasnap --file /path/to/capture.png
+fomosnap --file /path/to/capture.png
 ```
 
 To open the image currently on the clipboard:
 
 ```bash
-omasnap --clipboard
+fomosnap --clipboard
 ```
 
 The clipboard must offer readable image data. Text-only clipboard contents return an
 error instead of opening an empty editor.
 
 File URLs are accepted too. A saved capture notification's "Click to edit" action launches
-`omasnap` on the finished screenshot, so it can be reopened and re-annotated.
+`fomosnap` on the finished screenshot, so it can be reopened and re-annotated.
 
 ### Recent captures
 
 Every capture finished from the editor (copied, saved, or both) keeps its working
 document, source plus operation log, on a shelf of the five most recent under
-`~/Library/Application Support/omasnap/recent/` (`OMASNAP_RECENT_DIR` overrides). The select
+`~/Library/Application Support/fomosnap/recent/` (`FOMOSNAP_RECENT_DIR` overrides). The select
 overlay shows them as a small stack of cards on the right; hovering fans them out
 and clicking one reopens that capture in the editor, undo history intact, in place
 of a new screenshot. Finishing a reopened capture replaces its shelf entry.
 
 ### Configuration (optional)
 
-Omasnap has no settings UI and runs fine with no config at all. If you want to
+FOMOsnap has no settings UI and runs fine with no config at all. If you want to
 change where screenshots land or what they are called, create
-`~/.config/omasnap/omasnap.conf` (INI format); every key is optional:
+`~/.config/fomosnap/fomosnap.conf` (INI format); every key is optional:
 
 ```ini
 [output]
@@ -291,16 +309,16 @@ The default keeps the date first so the folder always sorts chronologically:
 literal text (`screenshot-` is just a string). A name that already exists
 gets `-2`, `-3`, … appended.
 
-Environment overrides (`OMASNAP_SCREENSHOT_DIR` takes precedence over the config):
+Environment overrides (`FOMOSNAP_SCREENSHOT_DIR` takes precedence over the config):
 
 ```bash
-OMASNAP_SCREENSHOT_DIR="$HOME/Pictures/Captures" omasnap
-OMASNAP_OCR_LANGS="eng+deu" omasnap
-OMASNAP_OCR_LANGS="ja-JP+en-US" omasnap
+FOMOSNAP_SCREENSHOT_DIR="$HOME/Pictures/Captures" fomosnap
+FOMOSNAP_OCR_LANGS="eng+deu" fomosnap
+FOMOSNAP_OCR_LANGS="ja-JP+en-US" fomosnap
 ```
 
 OCR runs on Vision, so there is no language data to install: every language the
-system recognizes is already available. `OMASNAP_OCR_LANGS` takes BCP-47 tags
+system recognizes is already available. `FOMOSNAP_OCR_LANGS` takes BCP-47 tags
 (`en-US`, `fr-FR`, `zh-Hans`) joined with `+`, and also accepts the old
 tesseract codes (`eng`, `deu`, `jpn`) for the common languages. Defaults to
 `eng`.
@@ -371,7 +389,7 @@ without reaching for the pointer.
 ### Pinned captures
 
 `P` renders the current capture, writes it to a `pin-<pid>-<n>-<random>.png` under
-the runtime snapshot directory, and launches the same `omasnap` executable in
+the runtime snapshot directory, and launches the same `fomosnap` executable in
 detached pin mode. Active pins stack from the bottom-right and can be dragged
 by the image background. The window stays visible on every Space without
 compositor window rules. It preserves the image
@@ -387,7 +405,7 @@ Hover the pin to reveal its controls:
 
 | Input on a pin | Action |
 |---|---|
-| Edit button | Reopen the full-resolution PNG in Omasnap and replace the pin |
+| Edit button | Reopen the full-resolution PNG in FOMOsnap and replace the pin |
 | Link button | Copy the source file path |
 | Copy button, `Ctrl+C` | Copy the full-resolution PNG |
 | Double-wide top-left drag handle | Drag the PNG into a file-capable drop target |
@@ -419,7 +437,7 @@ It also runs process-lifetime checks that drive the real executable and fail if
 it does not exit within a deadline, covering the teardown and signal paths that
 in-process tests cannot reach.
 
-`make icon` redraws `assets/Omasnap.icns` from `tools/icon-generator.cpp`; the
+`make icon` redraws `assets/FOMOsnap.icns` from `tools/icon-generator.cpp`; the
 icon is vector-drawn at every size rather than downscaled from one bitmap.
 
 `.github/workflows/build-macos.yml` runs the same `make check` build, smoke
@@ -437,7 +455,7 @@ The capture and annotation workflow is inspired by three excellent screenshot to
   approachable annotation toolbar.
 
 Thanks to their authors and contributors for establishing the interaction patterns that made
-this project possible. Omasnap is an independent implementation and is not
+this project possible. FOMOsnap is an independent implementation and is not
 affiliated with those projects.
 
 ## Project history

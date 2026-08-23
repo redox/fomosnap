@@ -1,6 +1,6 @@
-# Omasnap — Agent Guide
+# FOMOsnap — Agent Guide
 
-Omasnap is a super fast, native macOS screenshot and annotation overlay. It
+FOMOsnap is a super fast, native macOS screenshot and annotation overlay. It
 captures region, window, or full display, then opens an annotation editor with
 vector layers (arrows, lines, freehand, highlighter, rectangles, ellipses,
 numbered markers, text, OCR). Finished captures go to the clipboard,
@@ -25,7 +25,7 @@ that touches the system was replaced.
   notifications, `NSPasteboard` through `QClipboard` for the clipboard. The UI
   stays vector-drawn with the bundled Neucha font and no icon-theme dependency.
 - **Single binary.** Everything (capture, editor, pin, agent) runs from the one
-  executable inside `Omasnap.app`.
+  executable inside `FOMOsnap.app`.
 - **The platform layer is quarantined.** Only `src/mac/*.mm` may include an
   Apple header. The rest of the codebase is plain C++23 against Qt.
 
@@ -45,9 +45,9 @@ that touches the system was replaced.
 | `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, export |
 | `src/pin.cpp/.hpp` | Pinned-capture windows (floating, on every Space) |
 | `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly, kept for the scroll capture that is not built yet |
-| `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/Omasnap.icns` |
+| `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/FOMOsnap.icns` |
 | `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including process-lifetime checks that run the real executable |
-| `CMakeLists.txt` | Build definition; **the version lives here** (`project(omasnap VERSION ...)`) |
+| `CMakeLists.txt` | Build definition; **the version lives here** (`project(fomosnap VERSION ...)`) |
 
 ## Permissions
 
@@ -55,13 +55,13 @@ Screen Recording is a TCC permission granted to the app's **code signature**,
 not its path. Two consequences worth knowing before debugging a "capture
 returns nothing" report:
 
-- The build ad-hoc signs `Omasnap.app` after linking. A rebuild changes the
+- The build ad-hoc signs `FOMOsnap.app` after linking. A rebuild changes the
   signature, so macOS may ask again.
-- Never change `OMASNAP_BUNDLE_ID` casually: it is the TCC identity, and
+- Never change `FOMOSNAP_BUNDLE_ID` casually: it is the TCC identity, and
   changing it makes every user re-approve.
 
-Headless tests never touch either: `OMASNAP_TEST_MONITOR` describes a display
-(`name:x,y,width,height@scale`) and `OMASNAP_TEST_CAPTURE` supplies its pixels.
+Headless tests never touch either: `FOMOSNAP_TEST_MONITOR` describes a display
+(`name:x,y,width,height@scale`) and `FOMOSNAP_TEST_CAPTURE` supplies its pixels.
 
 ## Build and verify
 
@@ -98,7 +98,7 @@ have already bitten once each:
 
 ## Release process
 
-1. Bump `project(omasnap VERSION ...)` in `CMakeLists.txt`.
+1. Bump `project(fomosnap VERSION ...)` in `CMakeLists.txt`.
 2. Build and run `make check`.
 3. Commit, tag `v<version>`, push main and the tag. The GitHub workflow
    attaches the bundle to the release automatically.
