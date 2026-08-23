@@ -57,5 +57,5 @@ QString formatScreenshotFilename(const QString &pattern, const QDateTime &when,
 
 QString defaultConfigPath() {
   return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
-         QStringLiteral("/omasnap/omasnap.conf");
+         QStringLiteral("/fomosnap/fomosnap.conf");
 }

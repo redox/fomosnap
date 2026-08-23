@@ -64,8 +64,12 @@ QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
   }
   total -= kGap;
   const qreal left = bounds.left() + (bounds.width() - total) / 2.0;
+  // Both axes: `bounds` is the surface minus anything the display keeps for
+  // itself, so on a notched MacBook the strip hangs off the top of the usable
+  // area rather than off the top of the panel, where the camera housing would
+  // cover it.
   for (CaptureTab &tab : tabs)
-    tab.rect.translate(left, 0);
+    tab.rect.translate(left, bounds.top());
   return tabs;
 }
 

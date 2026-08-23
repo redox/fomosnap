@@ -4,7 +4,8 @@
 #include "pin-layout.hpp"
 #include "icons.hpp"
 
-#include <LayerShellQt/Window>
+#include "mac/mac-window.hpp"
+
 #include <QApplication>
 #include <QBuffer>
 #include <QDrag>
@@ -50,7 +51,7 @@ class PinWindow final : public QWidget {
 public:
   explicit PinWindow(QImage image, QString path)
       : image_(std::move(image)), path_(std::move(path)), snapshotFile_(path_) {
-    setWindowTitle(QStringLiteral("omasnap-pin"));
+    setWindowTitle(QStringLiteral("fomosnap-pin"));
     setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground);
     resize(initialSize());
@@ -66,6 +67,19 @@ public:
     const QScreen *target =
         screen() ? screen() : QGuiApplication::primaryScreen();
     return target ? target->availableGeometry().size() : QSize(1920, 1080);
+  }
+
+  /// Pin positions are screen-local, but a plain window is placed in global
+  /// coordinates, so every move goes through this origin.
+  [[nodiscard]] QPoint availableOrigin() const {
+    const QScreen *target =
+        screen() ? screen() : QGuiApplication::primaryScreen();
+    return target ? target->availableGeometry().topLeft() : QPoint();
+  }
+
+  void applyPosition(QPoint position) {
+    position_ = position;
+    move(availableOrigin() + position);
   }
 
 protected:
@@ -193,7 +207,7 @@ protected:
   void reopenInEditor() {
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                  {path_}))
-      showToast(QStringLiteral("Could not start omasnap"));
+      showToast(QStringLiteral("Could not start fomosnap"));
     else {
       snapshotFile_.preserveForEditor();
       close();
@@ -298,7 +312,7 @@ private:
     case 2:
       return QStringLiteral("Copy file path");
     case 3:
-      return QStringLiteral("Edit in omasnap");
+      return QStringLiteral("Edit in fomosnap");
     case 4:
       return QStringLiteral("Drag this image out");
     default:
@@ -319,17 +333,6 @@ private:
     });
   }
 
-  void applyPosition(QPoint position) {
-    position_ = position;
-    if (QWindow *handle = windowHandle()) {
-      if (LayerShellQt::Window *layer = LayerShellQt::Window::get(handle)) {
-        const QSize available = availableSize();
-        layer->setMargins(
-            QMargins(0, 0, available.width() - position.x() - width(),
-                     available.height() - position.y() - height()));
-      }
-    }
-  }
   // The wide drag handle stands alone in the top-left; edit, path, copy, and
   // close remain grouped in the top-right.
   [[nodiscard]] QRectF closeButtonRect() const { return controlRect(0); }
@@ -378,43 +381,31 @@ private:
 int runPinnedCapture(const QString &path) {
   QImage image(path);
   if (image.isNull()) {
-    qWarning("omasnap: could not load pinned image %s", qUtf8Printable(path));
+    qWarning("fomosnap: could not load pinned image %s", qUtf8Printable(path));
     return 1;
   }
 
   PinWindow window(std::move(image), path);
   if (!window.hasPinLock()) {
-    qWarning("omasnap: could not lock pinned image %s", qUtf8Printable(path));
+    qWarning("fomosnap: could not lock pinned image %s", qUtf8Printable(path));
     return 1;
   }
   static_cast<void>(window.winId());
   QWindow *handle = window.windowHandle();
-  LayerShellQt::Window *layer =
-      handle ? LayerShellQt::Window::get(handle) : nullptr;
-  if (!handle || !layer) {
-    qCritical("omasnap: could not create pinned layer surface");
+  if (!handle) {
+    qCritical("fomosnap: could not create the pinned window");
     return 1;
   }
 
-  layer->setScope(QStringLiteral("omasnap-pin"));
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layer->setAnchors(anchors);
   const QPoint slot = pinSlotPosition(window.availableSize(), window.size(),
                                       window.size(), window.slotIndex(),
                                       kPinGap, kCornerMargin);
-  layer->setMargins(QMargins(0, 0,
-                             window.availableSize().width() - slot.x() -
-                                 window.width(),
-                             window.availableSize().height() - slot.y() -
-                                 window.height()));
-  layer->setExclusiveZone(0);
-  layer->setDesiredSize(window.size());
-  layer->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityOnDemand);
-  layer->setActivateOnShow(false);
-  layer->setLayer(LayerShellQt::Window::LayerOverlay);
+  window.applyPosition(slot);
+  // Floating and stationary: a pin stays above ordinary windows and follows
+  // the user to every Space, which is what the layer surface gave it.
+  macwindow::configure(handle, macwindow::Level::Floating,
+                       macwindow::Keyboard::OnDemand,
+                       /*joinsAllSpaces=*/true, /*transparent=*/true);
   window.show();
   return QApplication::exec();
 }

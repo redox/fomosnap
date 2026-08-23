@@ -17,13 +17,18 @@
 
 class QFont;
 class QPainter;
-class QProcess;
 
 struct MonitorInfo {
+  /// Human-readable display name, as macOS localizes it ("Built-in Retina
+  /// Display"). Shown in logs; `displayId` is what addresses the hardware.
   QString name;
+  /// CGDirectDisplayID of the display. 0 when unknown.
+  quint32 displayId = 0;
   QRect geometry;
   QSize pixelSize;
   qreal scale = 1.0;
+  /// Always 0 on macOS: Spaces have no enumerable identity, and window
+  /// discovery already returns only the current Space.
   int workspaceId = 0;
 };
 
@@ -31,7 +36,7 @@ struct WindowTarget {
   QRect rect;
   QString stableId;
   QString title;
-  /** Hyprland window class (e.g. `firefox`, `org.gnome.Nautilus`). */
+  /** Owning application name (e.g. `Safari`, `Ghostty`). */
   QString appClass;
 };
 
@@ -120,9 +125,9 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] bool loadCaptureFonts();
 [[nodiscard]] QFont annotationTextFont(qreal size);
 /**
- * Discovers the focused monitor (name, geometry, scale). Fast: only one
- * `hyprctl monitors` call. Safe to call on the main thread to position the
- * overlay after the pixel capture has already produced a frozen frame.
+ * Discovers the focused monitor (name, geometry, scale): the display under
+ * the pointer. Safe to call on the main thread to position the overlay after
+ * the pixel capture has already produced a frozen frame.
  */
 [[nodiscard]] bool probeFocusedMonitor(MonitorInfo &monitor, QString &error);
 /**
@@ -140,12 +145,10 @@ enum class AnnotationLayer { Redaction, Default };
 /** Bounds of a text layer's glyph box, or of its readability pill when it
  *  has one; `start` is the baseline origin. */
 [[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation);
-/** Captures the named output through ext-image-copy-capture. */
-/** A live native capture session for one output (`MonitorInfo::name`, e.g.
- *  "DP-3") over its own Wayland connection: open once, then grab frames
- *  repeatedly into the same buffer: a scroll capture takes many per second
- *  and must not pay a process spawn or a session handshake for each. Frames
- *  are captured without the cursor and returned upright in output pixels. */
+/** A repeatable capture session for one display (`MonitorInfo::name`): open
+ *  once, then grab frames repeatedly. A scroll capture takes many per second
+ *  and must not pay a process spawn for each. Frames are captured without the
+ *  cursor and returned upright in display pixels. */
 class OutputCapture {
 public:
   OutputCapture();
@@ -153,17 +156,16 @@ public:
   OutputCapture(const OutputCapture &) = delete;
   OutputCapture &operator=(const OutputCapture &) = delete;
   [[nodiscard]] bool open(const QString &outputName, QString &error);
-  /// Grab the next frame. `timeoutMs` bounds the wait for the compositor to
-  /// deliver damage (a fully static output would otherwise block up to 2 s).
-  /// Returns false on timeout as well as on real failures, and `error` is set
-  /// either way; poll sessionStopped() to tell a dead session from a quiet
-  /// screen and simply retry the rest.
+  /// Grab the next frame. `timeoutMs` is accepted for call compatibility and
+  /// unused: ScreenCaptureKit stills carry their own internal timeout. Returns
+  /// false with `error` set on failure; poll sessionStopped() to tell a dead
+  /// session from a transient failure and simply retry the rest.
   [[nodiscard]] bool grab(QImage &image, QString &error, int timeoutMs = 2000);
   [[nodiscard]] bool isOpen() const;
-  /// True once the compositor has stopped the session (output gone, mode
-  /// change it will not resume from); further grabs cannot succeed.
+  /// True once the session is dead (display gone); further grabs cannot
+  /// succeed.
   [[nodiscard]] bool sessionStopped() const;
-  /** Pixel size the compositor announced for frames (empty until open). */
+  /** Pixel size of delivered frames (empty until open). */
   [[nodiscard]] QSize bufferSize() const;
   void close();
 
@@ -185,14 +187,11 @@ private:
  *  on a scaled monitor then opens at that scale rather than at 1:1. */
 void describeFileCapture(CaptureData &capture, QImage image,
                          const OperationLog &log);
-/** Returns an upright image for captured Wayland buffer contents. */
-[[nodiscard]] QImage normalizeWaylandCapture(const QImage &image,
-                                             std::uint32_t transform);
 [[nodiscard]] QImage renderCapture(const CaptureData &capture,
                                    const QRectF &selection,
                                    const QVector<Annotation> &annotations,
                                    BackgroundStyle backgroundStyle);
-/** Loads the current Wayland clipboard image. */
+/** Loads the current clipboard image. */
 [[nodiscard]] bool loadClipboardImage(QImage &image, QString &error);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
 [[nodiscard]] bool copyImageToClipboard(const QImage &image, QString &error);
@@ -231,7 +230,7 @@ QImage applyRedactionsScaled(QImage image, const QVector<Annotation> &redactions
                              const QRectF &selection, const QSizeF &targetSize);
 /** Creates or repairs a private directory owned by the current user. */
 [[nodiscard]] bool ensurePrivateDirectory(const QString &path);
-/** Returns Omasnap's private runtime directory, or empty on failure. */
+/** Returns FOMOsnap's private runtime directory, or empty on failure. */
 [[nodiscard]] QString secureRuntimeDirectory();
 /**
  * Filename-safe token for a window class: lowercase, `[a-z0-9-]` only,
@@ -268,7 +267,5 @@ void prunePinnedSnapshots();
 [[nodiscard]] bool saveTemporarySnapshot(const QImage &image, QString path,
                                          QString &error, int quality = -1);
 [[nodiscard]] QString recognizeText(const QImage &image, QString &error);
-/** Quotes a string for a shell argument passed to omarchy-notification-send. */
-[[nodiscard]] QString shellQuote(QString value);
 void sendCaptureNotification(const QString &message,
                              const QString &imagePath = {});

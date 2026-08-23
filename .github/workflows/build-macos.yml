@@ -1,0 +1,51 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS arm64
+    # Needs a macOS 14 SDK or newer: SCScreenshotManager and SMAppService both
+    # land in 14.
+    runs-on: macos-15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        run: brew install qt ninja
+
+      - name: Build, run the smoke suite, and analyze sources
+        run: make check
+
+      - name: Stage the application bundle
+        run: cmake --install build --prefix "$PWD/stage"
+
+      - name: Package the macOS artifact
+        run: |
+          version="$(./build/FOMOsnap.app/Contents/MacOS/FOMOsnap --version | cut -d' ' -f2)"
+          archive="fomosnap-${version}-macos-arm64.tar.gz"
+          echo "CAPTURE_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "CAPTURE_ARTIFACT=${archive%.tar.gz}" >> "$GITHUB_ENV"
+          tar -C stage -czf "$archive" FOMOsnap.app
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.CAPTURE_ARTIFACT }}
+          path: ${{ env.CAPTURE_ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Attach artifact to tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.CAPTURE_ARCHIVE }}

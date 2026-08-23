@@ -26,7 +26,7 @@ double milliseconds(Clock::duration duration) {
 void printTiming(const char *kind, const char *label, Clock::time_point now,
                  Clock::duration duration) {
   std::lock_guard lock(outputMutex());
-  std::fprintf(stderr, "OMASNAP_STARTUP +%9.3f ms  %s %-36s %9.3f ms\n",
+  std::fprintf(stderr, "FOMOSNAP_STARTUP +%9.3f ms  %s %-36s %9.3f ms\n",
                milliseconds(now - processEntryTime()), kind, label,
                milliseconds(duration));
   std::fflush(stderr);
@@ -35,7 +35,7 @@ void printTiming(const char *kind, const char *label, Clock::time_point now,
 
 bool startupTimingEnabled() {
   static const bool enabled = [] {
-    const QByteArray value = qgetenv("OMASNAP_PROFILE_STARTUP");
+    const QByteArray value = qgetenv("FOMOSNAP_PROFILE_STARTUP");
     return !value.isEmpty() && value != "0" && value.toLower() != "false";
   }();
   return enabled;

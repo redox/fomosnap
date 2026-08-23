@@ -25,5 +25,5 @@ struct OutputConfig {
                                                const QDateTime &when,
                                                const QString &appSlug);
 
-/** ~/.config/omasnap/omasnap.conf (XDG config location). */
+/** ~/.config/fomosnap/fomosnap.conf (XDG config location). */
 [[nodiscard]] QString defaultConfigPath();

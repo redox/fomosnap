@@ -1,97 +1,67 @@
 # Omasnap — Agent Guide
 
-Omasnap is a super fast, native Wayland screenshot and annotation overlay,
-built for [Omarchy](https://omarchy.org) on Hyprland. It captures region,
-window, or full monitor (plus a scrolling-region mode that stitches a taller
-page into one image), then opens an annotation editor with vector layers
-(arrows, lines, freehand, highlighter, rectangles, ellipses, numbered
-markers, text, OCR). Finished captures go to clipboard,
-`~/Pictures/Screenshots`, or a pinned always-on-top layer surface.
+Omasnap is a super fast, native macOS screenshot and annotation overlay. It
+captures region, window, or full display, then opens an annotation editor with
+vector layers (arrows, lines, freehand, highlighter, rectangles, ellipses,
+numbered markers, text, OCR). Finished captures go to the clipboard,
+`~/Pictures/Screenshots`, or a pinned always-on-top window.
+
+This is a macOS-only fork of [tobi/omasnap](https://github.com/tobi/omasnap),
+which targets Wayland and Hyprland. The editor is shared heritage; everything
+that touches the system was replaced.
 
 ## Project principles
 
-Each of these has a longer writeup under `docs/` — read it before making a
-change that touches the principle, not just this summary.
-
-- **A specialized tool, not a general app.** Omasnap does one job — capture,
-  annotate, output — and does it fast. It is not a drawing program, not a
-  file manager, not a general Wayland utility. A feature that isn't in
-  service of "screenshot, mark it up, send it somewhere" doesn't belong
-  here, however useful it might be on its own.
-- **The main thread never blocks.** Capture, paint, and input handling are
-  the UI thread's whole job. Disk I/O on a full-resolution image, spawning
-  a process, PNG encoding — all of it runs on a worker via
-  `QtConcurrent`/`QFutureWatcher`, never inline. See
-  [docs/threading.md](docs/threading.md).
-- **Every operation is undoable.** The operation log is the source of
-  truth; the visible image is rebuilt from it. Rendering for editing is a
-  pure, repeatable function of that log — nothing is baked into the working
-  image as you draw. Output is applied only on **Copy**, **Save**, or both,
-  which is the one moment a flattened image is produced. Redaction is the
-  deliberate, documented exception: it must actually destroy pixels at
-  render time so nothing recoverable leaks into an export, while remaining
-  a normal, undoable log entry until you export. See
-  [docs/editing-model.md](docs/editing-model.md).
-- **Minimally configurable — pre-configured to be right, like Omarchy.**
-  No settings UI, no wizards, no onboarding. The defaults are the product;
-  a config key is a narrow escape hatch for a real divergent need (where to
-  save, what to name it, preset colors), never a general mechanism. Adding
-  a new key needs the same justification the existing ones had, not "this
-  would be nice to expose."
-- **Speed first.** Instant capture, annotate, copy. No startup bloat.
-- **Wayland only, Hyprland only.** Monitor/window discovery, input
-  injection quirks, and notification conventions are all Hyprland-specific
-  on purpose. Code that happens to also run on another wlroots compositor,
-  because it stands on a real Wayland protocol rather than a Hyprland
-  shortcut, is a fine accident — it is not a target, not tested, and not a
-  bug magnet we chase. A PR that supports another compositor (niri, KDE,
-  etc.) is welcome **only if it adds zero complexity to the Hyprland
-  path** — no compositor branching, no backend abstraction, no new
-  dependency pulled in just for it. Otherwise it's rejected; fork it
-  instead. No X11, no macOS/Windows. See
-  [docs/platform-scope.md](docs/platform-scope.md).
-- **Lean, learned dependencies.** The dependency set is Qt6 + LayerShellQt +
-  wayland-client, plus shelling out to a few existing Omarchy tools
-  (`hyprctl`, `wl-copy`/`wl-paste`, `tesseract`, `omarchy-notification-send`)
-  instead of linking their equivalents in-process. Know this list before
-  proposing an addition to it. See [docs/dependencies.md](docs/dependencies.md).
-- **Single small binary.** Everything (capture, editor, pin mode, scroll
-  capture) runs from the one `omasnap` executable. Every new dependency or
-  vendored asset is weight every install carries.
-- **No backwards compatibility.** Break keybindings, CLI flags, file
-  formats, or internals whenever it keeps the code simpler or the tool
-  faster. Do not add compatibility shims, deprecation aliases, or migration
-  code.
-- **Omarchy aesthetics.** `omarchy-notification-send` when available,
-  `OMASNAP_OCR_LANGS`/`OMARCHY_OCR_LANGS` fallback for OCR languages,
-  minimal vector-drawn icons (no icon-theme dependency), the bundled Neucha
-  font.
+- **Speed first.** The tool must feel instant: capture, annotate, copy. No
+  startup bloat, no settings UI, no wizards. The resident agent exists so the
+  overlay costs nothing at press time.
+- **macOS only.** Requires macOS 14 or newer. No Wayland, no X11, no Windows,
+  and no abstraction layer kept around for a platform we do not ship.
+- **No backwards compatibility.** Break keybindings, CLI flags, file formats,
+  or internals whenever it keeps the code simpler or the tool faster. Do not
+  add compatibility shims, deprecation aliases, or migration code.
+- **Native where it counts.** System frameworks over bundled dependencies:
+  Vision for OCR rather than tesseract, `UNUserNotificationCenter` for
+  notifications, `NSPasteboard` through `QClipboard` for the clipboard. The UI
+  stays vector-drawn with the bundled Neucha font and no icon-theme dependency.
+- **Single binary.** Everything (capture, editor, pin, agent) runs from the one
+  executable inside `Omasnap.app`.
+- **The platform layer is quarantined.** Only `src/mac/*.mm` may include an
+  Apple header. The rest of the codebase is plain C++23 against Qt.
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
-| `src/main.cpp` | CLI parsing, single-instance lock, mode dispatch |
-| `src/instance-lock.cpp/.hpp` | Single-instance handover: cancel a running overlay, or stop it and take over for `--file` |
-| `src/capture.cpp/.hpp` | Capture, render pipeline, output (clipboard/save/notify), source+JSON operation-log persistence, config loading glue |
-| `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, the select↔edit phase machine, export |
-| `src/overlay-chrome.cpp/.hpp` | Shared chrome every overlay wears: the capture-kind tab strip, hotkey legend, status pill |
-| `src/scroll-capture.cpp/.hpp` | The scroll-capture panel: region-live page, manual/auto mode, grips, stitched result |
-| `src/scroll-inject.cpp/.hpp` | Auto-scroll wheel injection (uinput / `zwlr_virtual_pointer_v1`) |
-| `src/auto-capture.cpp/.hpp`, `src/stitch.cpp/.hpp` | Pure, offline-testable frame classification and stitching |
-| `src/stitch-replay.cpp` | Standalone tool: replay a dumped frame directory through the stitcher with no compositor |
-| `src/surface-capture.cpp` | In-process output/window capture via `ext-image-copy-capture` |
-| `src/cut.cpp/.hpp` | Cut-band tool: remove a strip and collapse the gap |
-| `src/recent-snaps.cpp/.hpp` | The recents shelf: shelving/reopening working documents |
-| `src/output-config.cpp/.hpp`, `src/palette-config.cpp/.hpp` | The optional `omasnap.conf` INI: output destination/filename, color presets |
-| `src/pin.cpp/.hpp`, `src/pin-file.cpp/.hpp`, `src/pin-layout.cpp/.hpp` | Pinned-capture layer-shell surfaces (bottom-right, all workspaces) |
-| `src/icons.cpp/.hpp` | Vector icon renderer for toolbar and pin controls |
-| `src/cli-path.cpp/.hpp` | Command-line image target resolution |
-| `src/eyedropper.cpp/.hpp` | Display-to-source color sampling |
-| `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage: offscreen region clicks, async capture, single-instance handover, stitching fixtures |
-| `docs/` | Longer writeups of the principles above — read before changing behavior they cover |
-| `install-omarchy` | Omarchy installer (deps via `omarchy-pkg-add`, installs to `~/.local`) |
+| `src/main.cpp` | CLI parsing, capture sessions, single-instance lock, agent mode |
+| `src/mac/mac-platform.hpp` | The whole platform surface: capture, OCR, notifications, hotkey, login item |
+| `src/mac/mac-screen.mm` | Display/window discovery and pixel capture via ScreenCaptureKit |
+| `src/mac/mac-window.hpp/.mm` | NSWindow placement for overlays, replacing wlr-layer-shell |
+| `src/mac/mac-ocr.mm` | OCR through Vision |
+| `src/mac/mac-app.mm` | Notifications, Dock policy, login item |
+| `src/mac/mac-hotkey.mm` | The system-wide hotkey (Carbon `RegisterEventHotKey`) |
+| `src/instance-lock.cpp/.hpp` | Single-instance handover: cancel a running overlay, or stop it and take over |
+| `src/capture.cpp/.hpp` | Capture, rendering, output, and source+JSON operation-log persistence |
+| `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, export |
+| `src/pin.cpp/.hpp` | Pinned-capture windows (floating, on every Space) |
+| `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly, kept for the scroll capture that is not built yet |
+| `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/Omasnap.icns` |
+| `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including process-lifetime checks that run the real executable |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(omasnap VERSION ...)`) |
+
+## Permissions
+
+Screen Recording is a TCC permission granted to the app's **code signature**,
+not its path. Two consequences worth knowing before debugging a "capture
+returns nothing" report:
+
+- The build ad-hoc signs `Omasnap.app` after linking. A rebuild changes the
+  signature, so macOS may ask again.
+- Never change `OMASNAP_BUNDLE_ID` casually: it is the TCC identity, and
+  changing it makes every user re-approve.
+
+Headless tests never touch either: `OMASNAP_TEST_MONITOR` describes a display
+(`name:x,y,width,height@scale`) and `OMASNAP_TEST_CAPTURE` supplies its pixels.
 
 ## Build and verify
 
@@ -99,35 +69,39 @@ change that touches the principle, not just this summary.
 make check
 ```
 
-`make check` configures and builds the project, runs the complete headless
-offscreen Qt smoke suite (including simulated region clicks and asynchronous
-capture), runs `clang-tidy`, and runs `clazy-standalone`/`qmllint` when those
-tools and source types are available. Use `make build` for a build-only pass,
-`make smoke` for the behavioral smoke suite, and `make install` to install to
-`~/.local`.
+`make check` configures and builds, runs the complete headless offscreen Qt
+smoke suite (including simulated region clicks, asynchronous capture,
+single-instance handover, and process-lifetime checks that drive the real
+executable), then runs `clang-tidy` and `clazy-standalone` when available.
+`make build` builds only, `make smoke` runs the behavioural suite, `make run`
+opens the overlay once, `make agent` runs the resident agent in the
+foreground, and `make install` installs the bundle to `/Applications`.
 
-Always run `make check` after behavioral changes. CI
-(`.github/workflows/build-linux.yml`) runs the same build and smoke on every
+Always run `make check` after behavioural changes. CI
+(`.github/workflows/build-macos.yml`) runs the same build and smoke on every
 push and PR.
 
-Dependencies (Arch): `base-devel cmake ninja pkgconf qt6-base layer-shell-qt
-wayland wayland-protocols wl-clipboard tesseract tesseract-data-eng`. See
-[docs/dependencies.md](docs/dependencies.md) before adding to this list.
+Dependencies: Xcode command-line tools and `brew install qt ninja`.
+
+### Testing what cannot be faked
+
+The editor is exercised in-process, but two classes of bug escape that and
+have already bitten once each:
+
+- **Teardown that deadlocks or crashes.** `tests/session-exit-smoke.cpp` runs
+  the real executable and fails if it does not exit within a deadline. Any new
+  session or shutdown path belongs there.
+- **Platform assumptions under a non-cocoa QPA.** `winId()` is only an
+  `NSView` under the `cocoa` platform; the headless suite runs `offscreen`,
+  where bridging it segfaults. `macwindow::` guards this centrally — do not
+  reintroduce a raw cast.
 
 ## Release process
 
 1. Bump `project(omasnap VERSION ...)` in `CMakeLists.txt`.
-2. Build and run the smoke test (above).
+2. Build and run `make check`.
 3. Commit, tag `v<version>`, push main and the tag. The GitHub workflow
-   attaches the build artifact to the release automatically.
-4. **Update omarchy-pkgs on every new version release.** In the
-   [omarchy-pkgs](https://github.com/omacom-io/omarchy-pkgs) fork
-   (`pkgbuilds/omasnap/`):
-   - Set `pkgver` in `PKGBUILD` to the new version.
-   - Replace `sha256sums` with the hash of
-     `https://github.com/tobi/omasnap/archive/refs/tags/v<version>.tar.gz`
-     (`curl -sL <url> | sha256sum`).
-   - Commit on a branch and open a PR to `omacom-io/omarchy-pkgs`.
+   attaches the bundle to the release automatically.
 
 See `README.md` for user-facing features, keybindings, and install
 instructions — keep it in sync when behavior changes.

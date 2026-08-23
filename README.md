@@ -1,11 +1,20 @@
-# Omasnap
+# FOMOsnap
 
-A native Wayland screenshot and annotation overlay designed for Omarchy and Hyprland.
-It captures the focused monitor before mapping an exclusive layer-shell surface, so the
-editor never appears in its own screenshot. The editor retains annotations as movable,
-resizable vector layers and preserves the monitor's native pixels on scaled displays.
+I had FOMO about [Omarchy](https://omarchy.org) and couldn't switch, so I
+brought its screenshot tool over instead.
 
-[![Looping Omasnap demonstration](assets/omasnap.gif)](assets/omasnap.mp4)
+FOMOsnap is a native macOS screenshot and annotation overlay: a macOS-only port
+of [tobi/omasnap](https://github.com/tobi/omasnap), which targets Wayland and
+Hyprland. It captures the display under the pointer before showing any window of
+its own, so the editor never appears in its own screenshot. Annotations stay
+movable, resizable vector layers, and captures export at the display's native
+backing resolution.
+
+The annotation editor is upstream's, largely unchanged — which is why this port
+was possible at all. Capture, windowing, OCR, clipboard, notifications, and the
+global hotkey were rewritten against macOS frameworks.
+
+[![Looping FOMOsnap demonstration](assets/omasnap.gif)](assets/omasnap.mp4)
 
 ## Features
 
@@ -13,7 +22,7 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 - A pointer-side readout that turns any drag into a ruler: the pointer position
   while the crosshair is idle, then the frame size in native export pixels while a
   region, a hovered window, or a crop handle is being sized.
-- Window capture is a crop of the focused-monitor frame. Overlapping windows stay
+- Window capture is a crop of the display frame. Overlapping windows stay
   visible; there is no second clean-window recapture.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Arrows, straight lines, smoothed freehand strokes, translucent highlighter strokes,
@@ -26,14 +35,16 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
   mesh-gradient backdrops, and rendered drop shadows.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
-- Pin a finished capture as a bottom-right always-on-top layer surface, launched
-  from the same `omasnap` executable and visible on every workspace.
-- Crash-resistant working documents under `/run/user/<UID>/omasnap/` (falling back to
-  a private `/tmp/omasnap-<UID>/`): the original source image plus a sidecar JSON
-  operation log. Undo still works after a crash or `--file` reopen. Saving and
-  copying write a normal flattened PNG to the clipboard or `~/Pictures/Screenshots`.
-- Verified PNG clipboard output through `wl-copy`/`wl-paste`, plus timestamped files
-  under `~/Pictures/Screenshots` by default.
+- Pin a finished capture as a bottom-right always-on-top window, launched
+  from the same `omasnap` executable and visible on every Space.
+- Crash-resistant working documents under a private
+  `~/Library/Application Support/omasnap/`: the original source image plus a
+  sidecar JSON operation log. Undo still works after a crash or `--file`
+  reopen. Saving and copying write a normal flattened PNG to the clipboard or
+  `~/Pictures/Screenshots`.
+- PNG on the pasteboard alongside a native image flavour, so any app can paste
+  it, plus timestamped files under `~/Pictures/Screenshots` by default.
+- Top chrome clears the camera housing on notched MacBooks.
 - Open an image already on the clipboard directly in the annotation editor.
 - A recents shelf: the select overlay stacks small cards of the last five captures
   along the right edge; hover to fan them out, click one to reopen it in the editor
@@ -42,108 +53,79 @@ resizable vector layers and preserves the monitor's native pixels on scaled disp
 
 ## Platform scope
 
-The supported target is **Wayland + Hyprland**, with Omarchy as the primary integration.
-The renderer, layer surface, clipboard, and monitor capture use Wayland protocols;
-monitor/window discovery currently calls `hyprctl`. The focused output is captured
-in-process through `ext-image-copy-capture` before the layer maps. Selection displays
-that captured frame, while the annotation editor uses
-a translucent layer scrim over the live desktop and draws only the selected capture.
-Another Wayland compositor could support the application after supplying equivalent
-monitor and window discovery; generic Wayland support is not claimed by 1.0.
+**macOS 14 (Sonoma) or newer**, Apple silicon or Intel. The floor is set by
+`SCScreenshotManager` and `SMAppService`, both introduced in 14.
 
-Runtime commands used by the application:
+| Concern | How it works |
+|---|---|
+| Screen capture | `ScreenCaptureKit`, one still per capture, cursor excluded |
+| Display and window discovery | `SCShareableContent`; "focused" means the display under the pointer |
+| Overlay placement | A borderless `NSWindow` at `CGShieldingWindowLevel`, above the menu bar and full-screen apps |
+| Pinned captures | A floating window that joins every Space |
+| OCR | The `Vision` framework — no tesseract, no language data to install |
+| Clipboard | `NSPasteboard`, via Qt |
+| Notifications | `UNUserNotificationCenter`, with a thumbnail; click to reopen |
+| Global hotkey | Carbon `RegisterEventHotKey`, which needs no Accessibility permission |
 
-- `hyprctl`
-- `wl-copy` and `wl-paste`
-- `tesseract`
-- `omarchy-notification-send` when available; saved captures include a thumbnail and
-  reopen in Omasnap when clicked. Notification failure does not invalidate output.
+Everything Wayland-specific was deleted rather than abstracted, so there is no
+Linux build in this fork. Use upstream for that.
 
-## Install on Omarchy
+**Not yet ported:** scroll capture (`--scroll`). It needs synthetic wheel events
+posted into another application, which on macOS means `CGEventPost` behind the
+Accessibility permission. The tab is still there and says so; the stitching code
+it feeds is intact.
 
-Clone the repository and run the Omarchy installer:
+### Permissions
 
-```bash
-git clone https://github.com/tobi/omasnap.git
-cd omasnap
-./install-omarchy
-```
+Omasnap asks for **Screen Recording** the first time it captures. macOS cannot
+grant this to a running process, so the first run explains, opens System
+Settings, and exits — grant it there and start Omasnap again.
 
-The installer uses Omarchy's package helper for missing dependencies, builds in
-`~/.cache/omasnap`, and installs under `~/.local`. It does not modify
-Hyprland configuration.
+The permission is attached to the app's code signature, not its path. A local
+rebuild changes that signature, so macOS may ask again after one.
 
-### Hyprland binding
+## Install
 
-Paste this into a Lua config loaded after `require("default.hypr.omarchy")`:
-
-```lua
-hl.unbind("PRINT")
-hl.unbind("F12")
-hl.unbind("ALT + SHIFT + 4")
-
-o.bind("PRINT", "Screenshot", "omasnap")
-o.bind("F12", "Screenshot", "omasnap")
-o.bind("ALT + SHIFT + 4", "Screenshot", "omasnap")
-
-hl.layer_rule({
-  match = { namespace = "^omasnap$" },
-  no_anim = true,
-  animation = "none",
-  no_screen_share = true,
-})
-```
-
-Each of these keys toggles: the first press opens the overlay, the next press dismisses it.
-
-Apply and verify:
+Requires the Xcode command-line tools.
 
 ```bash
-hyprctl reload
-hyprctl configerrors
-hyprctl binds -j | jq -c \
-  '[.[] | select(.description == "Screenshot") | {modmask,key,description}]'
+brew install qt ninja
+git clone https://github.com/redox/fomosnap.git
+cd fomosnap
+make install
 ```
 
-`omarchy plugin add` is intentionally not used. Omarchy plugins are Quickshell QML
-extensions; they do not install native executables or system packages.
+That builds `Omasnap.app` and installs it to `/Applications`. Set `PREFIX` to
+install elsewhere.
 
-Set `OMASNAP_PREFIX` before running `install-omarchy` to use a prefix other than
-`~/.local`.
-
-### Manual Arch Linux build
-
-Install the complete build/runtime dependency set:
+For a command-line entry point, link the executable inside the bundle:
 
 ```bash
-sudo pacman -S --needed \
-  base-devel cmake ninja pkgconf qt6-base layer-shell-qt \
-  wayland wayland-protocols hyprland wl-clipboard \
-  tesseract tesseract-data-eng
+ln -s /Applications/Omasnap.app/Contents/MacOS/Omasnap /usr/local/bin/omasnap
 ```
 
-Build and install:
+Invoking that symlink still runs the bundled app, which is what keeps the
+Screen Recording grant valid.
+
+### The resident agent and its hotkey
+
+macOS has no compositor config to bind a key in, so Omasnap can hold one
+itself. The agent stays resident with no Dock icon, registers a system-wide
+shortcut, and shows the overlay with no launch cost, because Qt is already warm.
 
 ```bash
-cmake -S . -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="$HOME/.local"
-cmake --build build --parallel
-cmake --install build
+omasnap --agent                          # foreground, default ctrl+cmd+4
+omasnap --agent --hotkey cmd+shift+2     # any modifier+key combination
+omasnap --install-agent                  # start it at login
+omasnap --uninstall-agent                # stop starting it at login
 ```
 
-The install step places:
+`OMASNAP_HOTKEY` sets the default. The key toggles: press once to open the
+overlay, again to dismiss it. `Cmd+Shift+3/4/5` are already taken by the system
+screenshot tool, so pick something else.
 
-- `~/.local/bin/omasnap`
-- `~/.local/share/applications/omasnap.desktop`
-- `~/.local/share/licenses/omasnap/Neucha-OFL.txt`
-
-Ensure `~/.local/bin` is on `PATH`, then verify the installed CLI:
-
-```bash
-omasnap --version
-omasnap --help
-```
+Prefer your own launcher? Skip the agent entirely and bind `omasnap` in Raycast,
+Shortcuts, or Karabiner. Every capture is a normal process launch.
 
 ## CLI capture modes
 
@@ -229,7 +211,7 @@ omasnap ~/Pictures/Screenshots/screenshot-2026-08-11_10-00-00.png
 omasnap --file /path/to/capture.png
 ```
 
-To open the image currently on the Wayland clipboard:
+To open the image currently on the clipboard:
 
 ```bash
 omasnap --clipboard
@@ -245,7 +227,7 @@ File URLs are accepted too. A saved capture notification's "Click to edit" actio
 
 Every capture finished from the editor (copied, saved, or both) keeps its working
 document, source plus operation log, on a shelf of the five most recent under
-`~/.local/state/omasnap/recent/` (`OMASNAP_RECENT_DIR` overrides). The select
+`~/Library/Application Support/omasnap/recent/` (`OMASNAP_RECENT_DIR` overrides). The select
 overlay shows them as a small stack of cards on the right; hovering fans them out
 and clicking one reopens that capture in the editor, undo history intact, in place
 of a new screenshot. Finishing a reopened capture replaces its shelf entry.
@@ -276,7 +258,7 @@ Filename tokens:
 |---|---|
 | `{date}` | `2026-08-23` (yyyy-MM-dd) |
 | `{time}` | `14-05-09` (HH-mm-ss) |
-| `{app}` | Slug of the app under the selection, e.g. `firefox`, `alacritty`, `nautilus` (from the Hyprland window class). Empty for fullscreen captures, file edits, and when nothing is known — the separator before or after it is dropped too, so the default pattern gives `screenshot-2026-08-23_14-05-09.png`. |
+| `{app}` | Slug of the app under the selection, e.g. `safari`, `ghostty`, `finder` (from the owning application's name). Empty for fullscreen captures, file edits, and when nothing is known — the separator before or after it is dropped too, so the default pattern gives `screenshot-2026-08-23_14-05-09.png`. |
 
 The default keeps the date first so the folder always sorts chronologically:
 `screenshot-2026-08-23_14-05-09-firefox.png`. Anything else in the pattern is
@@ -288,21 +270,21 @@ Environment overrides (`OMASNAP_SCREENSHOT_DIR` takes precedence over the config
 ```bash
 OMASNAP_SCREENSHOT_DIR="$HOME/Pictures/Captures" omasnap
 OMASNAP_OCR_LANGS="eng+deu" omasnap
-# Thai plus English:
-OMASNAP_OCR_LANGS="tha+eng" omasnap
+OMASNAP_OCR_LANGS="ja-JP+en-US" omasnap
 ```
 
-Install the corresponding Tesseract language data before adding a language to
-`OMASNAP_OCR_LANGS`. When unset, omasnap falls back to Omarchy's
-`OMARCHY_OCR_LANGS` (which commonly includes the user's script, e.g.
-`tha+eng`), then to `eng`.
+OCR runs on Vision, so there is no language data to install: every language the
+system recognizes is already available. `OMASNAP_OCR_LANGS` takes BCP-47 tags
+(`en-US`, `fr-FR`, `zh-Hans`) joined with `+`, and also accepts the old
+tesseract codes (`eng`, `deu`, `jpn`) for the common languages. Defaults to
+`eng`.
 
 ## Controls
 
 ### Capture selection
 
 Tabs across the top of the overlay switch the capture kind: **Region**,
-**Window**, **Scrolling Region**, **Fullscreen**. All four are modes of the
+**Scrolling Region**, **Window**, **Fullscreen**. All four are modes of the
 same overlay. Scrolling Region selects exactly like Region; once the region is
 drawn, the page inside it goes live and the scroll controls appear in place.
 The tabs stay up in the editor too: a tab there drops the edit and goes back to
@@ -313,7 +295,7 @@ without reaching for the pointer.
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Step through the capture-kind tabs (Region, Window, Scrolling Region) |
+| `Space` | Step through the capture-kind tabs (Region, Scrolling Region, Window) |
 | `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `SUPER + Arrow` | Move among windows in window mode |
@@ -365,7 +347,7 @@ without reaching for the pointer.
 `P` renders the current capture, writes it to a `pin-<pid>-<n>-<random>.png` under
 the runtime snapshot directory, and launches the same `omasnap` executable in
 detached pin mode. Active pins stack from the bottom-right and can be dragged
-by the image background. The layer stays visible on every workspace without
+by the image background. The window stays visible on every Space without
 compositor window rules. It preserves the image
 aspect ratio, with a maximum width of one third of the screen and a maximum height of one
 half.
@@ -386,9 +368,9 @@ Hover the pin to reveal its controls:
 | Wheel | Resize within the screen caps, preserving aspect ratio |
 | Close button, `Esc`, middle-click | Close |
 
-Image and path copying use `wl-copy` rather than `QClipboard`, so clipboard data remains
-available after the pin is closed. No font-based symbol set or compositor-specific window
-rule is required; the controls use the same vector icon renderer as the annotation toolbar.
+Image and path copying go to `NSPasteboard`, which owns the data, so it stays
+available after the pin is closed. No font-based symbol set is required; the
+controls use the same vector icon renderer as the annotation toolbar.
 
 Creation tools return to Select after one placement without selecting the new layer. In
 Select mode, arrows and lines show only their two endpoint handles; other layers show a
@@ -407,26 +389,33 @@ replay, vector movement and scaling, text editing, OCR, native-DPI output,
 endpoint-only line selection, external crop handles, and the native-pixel
 measurement readout on a scaled monitor.
 
+It also runs process-lifetime checks that drive the real executable and fail if
+it does not exit within a deadline, covering the teardown and signal paths that
+in-process tests cannot reach.
+
 For live launch profiling, the binary has an opt-in millisecond trace from `main()`
 through the first completed overlay paint:
 
 ```bash
-OMASNAP_PROFILE_STARTUP=1 ./build/omasnap 2>startup.log
+FOMOSNAP_PROFILE_STARTUP=1 ./build/FOMOsnap.app/Contents/MacOS/FOMOsnap 2>startup.log
 ```
 
-The trace also breaks native capture into Wayland registry, buffer allocation, frame wait,
-and pixel handoff stages. It is completely silent by default.
+The trace is completely silent by default.
 
-`.github/workflows/build-linux.yml` runs the same `make check` build, interaction smoke,
-and available static-analysis checks in an Arch Linux container, stages the CMake installation, and uploads a versioned Linux
-artifact. A `v*` tag also attaches that artifact to the corresponding GitHub release.
+`make icon` redraws `assets/Omasnap.icns` from `tools/icon-generator.cpp`; the
+icon is vector-drawn at every size rather than downscaled from one bitmap.
+
+`.github/workflows/build-macos.yml` runs the same `make check` build, smoke
+suite, and available static-analysis checks on a macOS runner, stages the app
+bundle, and uploads a versioned artifact. A `v*` tag also attaches that
+artifact to the corresponding GitHub release.
 
 ## Acknowledgements
 
 The capture and annotation workflow is inspired by three excellent screenshot tools:
 
 - [Shottr](https://shottr.cc/) — fast region/window capture, OCR, and polished backdrops.
-- [Satty](https://github.com/Satty-org/Satty) — a focused, Wayland-native annotation workflow.
+- [Satty](https://github.com/Satty-org/Satty) — a focused, native annotation workflow.
 - [Flameshot](https://github.com/flameshot-org/flameshot) — selection-first capture and an
   approachable annotation toolbar.
 
@@ -436,9 +425,14 @@ affiliated with those projects.
 
 ## Project history
 
-This standalone repository was extracted with `git filter-repo` from the original Omarchy
-system-customization repository. The former `omasnap/` directory was promoted to
-the repository root while retaining its relevant commit history.
+FOMOsnap is a fork of [tobi/omasnap](https://github.com/tobi/omasnap), which was
+itself extracted with `git filter-repo` from the original Omarchy
+system-customization repository. This fork keeps that history and replaces the
+Wayland platform layer with a macOS one; the annotation editor is substantially
+unchanged, which is why the port was possible at all.
+
+Upstream is where to go for Wayland and Hyprland — this repository will not
+carry a Linux build.
 
 The bundled Neucha font is distributed under the SIL Open Font License; its license is in
 `assets/OFL.txt` and is installed with the application.
