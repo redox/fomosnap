@@ -60,6 +60,12 @@ returns nothing" report:
 - Never change `FOMOSNAP_BUNDLE_ID` casually: it is the TCC identity, and
   changing it makes every user re-approve.
 
+The login item is a plain user LaunchAgent, deliberately, not `SMAppService`:
+`SMAppService` checks a code requirement that an ad-hoc-signed app in a Homebrew
+keg does not satisfy, and launchd then refuses to spawn the job with
+`EX_CONFIG`. The plist must always name `--agent`, or logging in starts a
+capture overlay.
+
 Headless tests never touch either: `FOMOSNAP_TEST_MONITOR` describes a display
 (`name:x,y,width,height@scale`) and `FOMOSNAP_TEST_CAPTURE` supplies its pixels.
 

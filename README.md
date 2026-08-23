@@ -96,6 +96,13 @@ brew install --HEAD fomosnap
 `--HEAD` builds from the tip of `main`. Once a `v*` tag is cut, the formula
 gains a stable `url`/`sha256` and plain `brew install fomosnap` works.
 
+To pick up new commits, `--fetch-HEAD` is required — without it Homebrew reuses
+its cached clone and reinstalls the same commit it already built:
+
+```bash
+brew upgrade --fetch-HEAD fomosnap
+```
+
 The formula builds against Homebrew's Qt rather than bundling it, and links the
 executable inside the bundle as `fomosnap`. Always launch it through that
 symlink or the bundle itself: Screen Recording is granted to the bundle's
@@ -158,15 +165,22 @@ fomosnap --uninstall-agent                # stop starting it at login
 `FOMOSNAP_HOTKEY` sets the default. The key toggles: press once to open the
 overlay, again to dismiss it.
 
-`--install-agent` registers a LaunchAgent that ships inside the bundle, through
-`SMAppService`, so it appears in **System Settings > General > Login Items** and
-can be turned off there. It refers to the executable by a bundle-relative path,
-so the login item survives the app moving — which it does on every Homebrew
-upgrade, since the Cellar path carries the version.
+`--install-agent` writes a user LaunchAgent to
+`~/Library/LaunchAgents/com.fomosnap.FOMOsnap.agent.plist` and loads it, so the
+agent starts at every login. `--uninstall-agent` unloads and removes it.
 
-The plist names `--agent` explicitly. Registering the *app* as a login item
-instead would launch it at login with no arguments, which means an ordinary
-capture: a selection overlay across the screen the moment you log in.
+Two details that are load-bearing rather than incidental:
+
+- The plist names `--agent` explicitly. Registering the *app* to launch at login
+  instead would start it with no arguments, which means an ordinary capture — a
+  selection overlay across the screen the moment you log in.
+- It is a plain LaunchAgent, not `SMAppService`. `SMAppService` checks a code
+  requirement that an ad-hoc-signed app in a Homebrew keg does not satisfy:
+  launchd accepts the registration and then refuses to spawn it, failing with
+  `EX_CONFIG`. A plain LaunchAgent works from any location.
+
+After a Homebrew upgrade the plist still points at `$(brew --prefix fomosnap)`,
+a stable symlink, so the login item survives version changes.
 
 Prefer your own launcher? Skip the agent entirely and bind `fomosnap` in Raycast,
 Shortcuts, or Karabiner. Every capture is a normal process launch.

@@ -18,15 +18,9 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Concurrent Core Gui Test Widgets)
 # it, not to the path, so changing it makes the user re-approve FOMOsnap.
 set(FOMOSNAP_BUNDLE_ID "com.fomosnap.FOMOsnap" CACHE STRING "Bundle identifier")
 
-# The login item is a LaunchAgent inside the bundle, so it can name --agent.
-set(FOMOSNAP_APP_NAME "FOMOsnap")
+# The login item is a user LaunchAgent written to ~/Library/LaunchAgents at
+# --install-agent time; only its label is fixed at build time.
 set(FOMOSNAP_AGENT_LABEL "${FOMOSNAP_BUNDLE_ID}.agent")
-set(FOMOSNAP_AGENT_PLIST
-  "${CMAKE_CURRENT_BINARY_DIR}/${FOMOSNAP_AGENT_LABEL}.plist")
-configure_file(packaging/LaunchAgent.plist.in "${FOMOSNAP_AGENT_PLIST}" @ONLY)
-set_source_files_properties("${FOMOSNAP_AGENT_PLIST}" PROPERTIES
-  MACOSX_PACKAGE_LOCATION "Library/LaunchAgents"
-  GENERATED TRUE)
 
 set(FOMOSNAP_MAC_SOURCES
   src/mac/mac-platform.hpp
@@ -95,7 +89,7 @@ target_include_directories(fomosnap-core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 target_compile_definitions(fomosnap-core PRIVATE
-  FOMOSNAP_AGENT_PLIST_NAME="${FOMOSNAP_AGENT_LABEL}.plist")
+  FOMOSNAP_AGENT_LABEL="${FOMOSNAP_AGENT_LABEL}")
 target_compile_features(fomosnap-core PUBLIC cxx_std_23)
 target_compile_options(fomosnap-core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(fomosnap-core PUBLIC
@@ -110,7 +104,6 @@ target_link_libraries(fomosnap-core PUBLIC
   "-framework CoreVideo"
   "-framework Foundation"
   "-framework ScreenCaptureKit"
-  "-framework ServiceManagement"
   "-framework UserNotifications"
   "-framework Vision"
 )
@@ -120,8 +113,7 @@ set_source_files_properties("${FOMOSNAP_ICON}" PROPERTIES
   MACOSX_PACKAGE_LOCATION "Resources")
 
 qt_add_executable(fomosnap MACOSX_BUNDLE
-  src/main.cpp src/pin.cpp src/pin.hpp "${FOMOSNAP_ICON}"
-  "${FOMOSNAP_AGENT_PLIST}")
+  src/main.cpp src/pin.cpp src/pin.hpp "${FOMOSNAP_ICON}")
 target_compile_options(fomosnap PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(fomosnap PRIVATE
   FOMOSNAP_VERSION="${PROJECT_VERSION}")
@@ -178,7 +170,8 @@ target_include_directories(fomosnap-smoke PRIVATE
 target_compile_options(fomosnap-smoke PRIVATE -Wall -Wextra -Wpedantic)
 # The process-lifetime checks drive the real executable, so they need its path.
 target_compile_definitions(fomosnap-smoke PRIVATE
-  FOMOSNAP_EXECUTABLE="$<TARGET_FILE:fomosnap>")
+  FOMOSNAP_EXECUTABLE="$<TARGET_FILE:fomosnap>"
+  FOMOSNAP_AGENT_LABEL="${FOMOSNAP_AGENT_LABEL}")
 add_dependencies(fomosnap-smoke fomosnap)
 target_link_libraries(fomosnap-smoke PRIVATE fomosnap-core Qt6::Test)
 add_test(NAME fomosnap-smoke COMMAND fomosnap-smoke "${CMAKE_CURRENT_BINARY_DIR}/fomosnap-smoke-output")
