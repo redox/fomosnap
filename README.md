@@ -86,6 +86,32 @@ rebuild changes that signature, so macOS may ask again after one.
 
 ## Install
 
+### Homebrew
+
+```bash
+brew tap redox/tap
+brew install --HEAD fomosnap
+```
+
+`--HEAD` builds from the tip of `main`. Once a `v*` tag is cut, the formula
+gains a stable `url`/`sha256` and plain `brew install fomosnap` works.
+
+The formula builds against Homebrew's Qt rather than bundling it, and links the
+executable inside the bundle as `fomosnap`. Always launch it through that
+symlink or the bundle itself: Screen Recording is granted to the bundle's
+identity, and a binary copied out of it has none.
+
+Homebrew keeps the app in its own prefix rather than `/Applications`. To get it
+into Launchpad and Spotlight:
+
+```bash
+ln -sfn "$(brew --prefix fomosnap)/FOMOsnap.app" /Applications/FOMOsnap.app
+```
+
+The formula lives in `packaging/homebrew/fomosnap.rb`; the tap holds a copy.
+
+### From source
+
 Requires the Xcode command-line tools.
 
 ```bash

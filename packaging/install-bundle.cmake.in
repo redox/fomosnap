@@ -3,22 +3,26 @@
 # Recording is granted to the signature -- an installed app that is not
 # re-signed silently loses the permission and cannot capture anything.
 #
-# macdeployqt copies Qt into the bundle before signing, so what gets signed is
-# also what runs on a machine without Homebrew.
+# With FOMOSNAP_BUNDLE_QT, macdeployqt copies Qt into the bundle before signing,
+# so what gets signed is also what runs on a machine without Homebrew. A
+# Homebrew formula turns that off and relies on the qt dependency instead, but
+# still needs the re-sign.
 
 set(bundle "${CMAKE_INSTALL_PREFIX}/FOMOsnap.app")
 if(NOT IS_DIRECTORY "${bundle}")
   message(FATAL_ERROR "No bundle to finish at ${bundle}")
 endif()
 
-message(STATUS "Bundling Qt into ${bundle}")
-execute_process(
-  COMMAND "@MACDEPLOYQT@" "${bundle}" -always-overwrite
-  RESULT_VARIABLE deployed
-  OUTPUT_QUIET
-)
-if(NOT deployed EQUAL 0)
-  message(FATAL_ERROR "macdeployqt failed (${deployed})")
+if(@FOMOSNAP_BUNDLE_QT@)
+  message(STATUS "Bundling Qt into ${bundle}")
+  execute_process(
+    COMMAND "@MACDEPLOYQT@" "${bundle}" -always-overwrite
+    RESULT_VARIABLE deployed
+    OUTPUT_QUIET
+  )
+  if(NOT deployed EQUAL 0)
+    message(FATAL_ERROR "macdeployqt failed (${deployed})")
+  endif()
 endif()
 
 message(STATUS "Signing ${bundle}")
