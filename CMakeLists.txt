@@ -188,8 +188,15 @@ target_compile_features(stitch-replay PRIVATE cxx_std_23)
 target_compile_options(stitch-replay PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(stitch-replay PRIVATE Qt6::Core Qt6::Gui)
 
+# A standalone install copies Qt into the bundle so it runs on a Mac without
+# Homebrew. A Homebrew formula declares qt as a dependency instead, and should
+# not ship a second copy of it inside the keg.
+option(FOMOSNAP_BUNDLE_QT "Copy Qt into the bundle at install time" ON)
 find_program(MACDEPLOYQT macdeployqt HINTS "${QT_HOST_PATH}/bin"
-  "${CMAKE_PREFIX_PATH}/bin" REQUIRED)
+  "${CMAKE_PREFIX_PATH}/bin")
+if(FOMOSNAP_BUNDLE_QT AND NOT MACDEPLOYQT)
+  message(FATAL_ERROR "macdeployqt not found; set FOMOSNAP_BUNDLE_QT=OFF")
+endif()
 configure_file(packaging/install-bundle.cmake.in install-bundle.cmake @ONLY)
 
 install(TARGETS fomosnap
