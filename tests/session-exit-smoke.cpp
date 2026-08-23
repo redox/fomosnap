@@ -8,6 +8,7 @@
 #include "session-exit-smoke.hpp"
 
 #include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -166,6 +167,67 @@ bool runAgentExits(const QProcessEnvironment &environment, QString &error) {
   return true;
 }
 
+/// The login item is a user LaunchAgent. It must name --agent explicitly:
+/// registering the app bare would launch an ordinary capture at login and put
+/// a selection overlay across the screen. launchctl is skipped here; this
+/// checks the plist that launchd would be handed.
+bool runLoginItemRoundTrip(const QString &home, QString &error) {
+  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+  environment.insert(QStringLiteral("HOME"), home);
+  environment.insert(QStringLiteral("QT_QPA_PLATFORM"),
+                     QStringLiteral("offscreen"));
+  environment.insert(QStringLiteral("FOMOSNAP_TEST_NO_LAUNCHCTL"),
+                     QStringLiteral("1"));
+
+  const QString plistPath =
+      QDir(home).filePath(QStringLiteral("Library/LaunchAgents/%1.plist")
+                              .arg(QString::fromLatin1(FOMOSNAP_AGENT_LABEL)));
+
+  int exitCode = -1;
+  if (!runToExit({QStringLiteral("--install-agent")}, environment, exitCode,
+                 error))
+    return false;
+  if (exitCode != 0) {
+    error = QStringLiteral("--install-agent exited %1").arg(exitCode);
+    return false;
+  }
+
+  QFile plist(plistPath);
+  if (!plist.open(QIODevice::ReadOnly)) {
+    error = QStringLiteral("--install-agent wrote no plist at %1").arg(plistPath);
+    return false;
+  }
+  const QString contents = QString::fromUtf8(plist.readAll());
+  plist.close();
+  if (!contents.contains(QStringLiteral("--agent"))) {
+    error = QStringLiteral("The login item does not pass --agent, so it would "
+                           "capture at login instead of going resident");
+    return false;
+  }
+  if (!contents.contains(QStringLiteral("FOMOsnap.app/Contents/MacOS/"))) {
+    error = QStringLiteral("The login item does not point inside the bundle, "
+                           "so it would lose the Screen Recording grant");
+    return false;
+  }
+  if (!contents.contains(QStringLiteral("<key>RunAtLoad</key>"))) {
+    error = QStringLiteral("The login item would not start at login");
+    return false;
+  }
+
+  if (!runToExit({QStringLiteral("--uninstall-agent")}, environment, exitCode,
+                 error))
+    return false;
+  if (exitCode != 0) {
+    error = QStringLiteral("--uninstall-agent exited %1").arg(exitCode);
+    return false;
+  }
+  if (QFile::exists(plistPath)) {
+    error = QStringLiteral("--uninstall-agent left the plist behind");
+    return false;
+  }
+  return true;
+}
+
 /// Usage errors must not reach the overlay at all.
 bool runUsageErrorExits(const QProcessEnvironment &environment,
                         QString &error) {
@@ -205,5 +267,6 @@ bool runSessionExitSmoke(QString &error) {
   return runQuickOutputExits(environment, error) &&
          runTerminationExits(environment, sourcePath, error) &&
          runAgentExits(environment, error) &&
+         runLoginItemRoundTrip(home.path(), error) &&
          runUsageErrorExits(environment, error);
 }

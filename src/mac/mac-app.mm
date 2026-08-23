@@ -5,14 +5,18 @@
 #include "mac-platform.hpp"
 
 #import <AppKit/AppKit.h>
-#import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QProcess>
+#include <QSaveFile>
 #include <QStandardPaths>
+#include <QStringList>
 #include <QUuid>
+
+#include <unistd.h>
 
 namespace {
 
@@ -130,38 +134,105 @@ void becomeAccessoryApp() {
 
 void activateApp() { [NSApp activateIgnoringOtherApps:YES]; }
 
+/// Absolute path of the executable inside this app bundle. The plist needs an
+/// absolute path, and it must be a stable one: under Homebrew the bundle lives
+/// in a versioned Cellar directory reached through a stable `opt` symlink, and
+/// the process is launched through that symlink, so this is what it resolves.
+[[nodiscard]] QString agentExecutablePath() {
+  NSString *executable = [[NSBundle mainBundle] executablePath];
+  return executable ? QString::fromNSString(executable) : QString();
+}
+
+[[nodiscard]] QString agentPlistPath() {
+  return QDir(QDir::homePath())
+      .filePath(QStringLiteral("Library/LaunchAgents/%1.plist")
+                    .arg(QString::fromLatin1(FOMOSNAP_AGENT_LABEL)));
+}
+
+/// Runs launchctl and reports whether it succeeded. Bootout is allowed to fail:
+/// it is also used to clear a job that may not be loaded.
+[[nodiscard]] bool runLaunchctl(const QStringList &arguments) {
+  if (qEnvironmentVariableIsSet("FOMOSNAP_TEST_NO_LAUNCHCTL"))
+    return true;
+  QProcess launchctl;
+  launchctl.start(QStringLiteral("launchctl"), arguments);
+  if (!launchctl.waitForStarted(5000))
+    return false;
+  return launchctl.waitForFinished(10000) && launchctl.exitCode() == 0;
+}
+
 bool setLaunchAtLogin(bool enabled, QString &error) {
-  if (!isBundled()) {
+  const QString label = QString::fromLatin1(FOMOSNAP_AGENT_LABEL);
+  const QString plistPath = agentPlistPath();
+  const QString domain = QStringLiteral("gui/%1").arg(::getuid());
+
+  if (!enabled) {
+    static_cast<void>(runLaunchctl(
+        {QStringLiteral("bootout"), QStringLiteral("%1/%2").arg(domain, label)}));
+    if (QFile::exists(plistPath) && !QFile::remove(plistPath)) {
+      error = QStringLiteral("Could not remove %1").arg(plistPath);
+      return false;
+    }
+    return true;
+  }
+
+  const QString executable = agentExecutablePath();
+  if (executable.isEmpty()) {
     error = QStringLiteral(
         "Launch at login needs the bundled FOMOsnap.app, not a bare binary");
     return false;
   }
-  // The agent service, not the main app service: registering the app itself
-  // would have launched it at login with no arguments, which means an
-  // ordinary capture -- a selection overlay across the screen at login. The
-  // bundled LaunchAgent plist names --agent instead.
-  SMAppService *service = [SMAppService
-      agentServiceWithPlistName:@FOMOSNAP_AGENT_PLIST_NAME];
-  NSError *failure = nil;
-  const BOOL succeeded = enabled
-                             ? [service registerAndReturnError:&failure]
-                             : [service unregisterAndReturnError:&failure];
-  if (!succeeded) {
-    error = QStringLiteral("Could not %1 the login item: %2")
-                .arg(enabled ? QStringLiteral("register")
-                             : QStringLiteral("remove"),
-                     failure ? QString::fromNSString(failure.localizedDescription)
-                             : QStringLiteral("no detail reported"));
+
+  // A plain user LaunchAgent rather than SMAppService. SMAppService checks a
+  // code requirement that an ad-hoc signature in a Homebrew keg does not
+  // satisfy: launchd accepted the registration and then refused to spawn it,
+  // with EX_CONFIG. This works from any location.
+  //
+  // ProgramArguments names --agent explicitly. Launching the app bare would
+  // start an ordinary capture and put a selection overlay on screen at login.
+  const QString plist =
+      QStringLiteral(
+          "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+          "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+          "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+          "<plist version=\"1.0\">\n"
+          "<dict>\n"
+          "  <key>Label</key>\n  <string>%1</string>\n"
+          "  <key>ProgramArguments</key>\n"
+          "  <array>\n    <string>%2</string>\n    <string>--agent</string>\n"
+          "  </array>\n"
+          "  <key>RunAtLoad</key>\n  <true/>\n"
+          // Restart on a crash, but respect a deliberate quit: SIGTERM on an
+          // idle agent exits cleanly and should stay exited.
+          "  <key>KeepAlive</key>\n"
+          "  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n"
+          "  <key>ProcessType</key>\n  <string>Interactive</string>\n"
+          "</dict>\n</plist>\n")
+          .arg(label, executable.toHtmlEscaped());
+
+  if (!QDir().mkpath(QFileInfo(plistPath).absolutePath())) {
+    error = QStringLiteral("Could not create %1")
+                .arg(QFileInfo(plistPath).absolutePath());
+    return false;
+  }
+  QSaveFile file(plistPath);
+  if (!file.open(QIODevice::WriteOnly) ||
+      file.write(plist.toUtf8()) != plist.toUtf8().size() || !file.commit()) {
+    error = QStringLiteral("Could not write %1: %2")
+                .arg(plistPath, file.errorString());
+    return false;
+  }
+
+  // Replace any previous registration, which may point at an older path.
+  static_cast<void>(runLaunchctl(
+      {QStringLiteral("bootout"), QStringLiteral("%1/%2").arg(domain, label)}));
+  if (!runLaunchctl({QStringLiteral("bootstrap"), domain, plistPath})) {
+    error = QStringLiteral("Could not load the login item (%1)").arg(plistPath);
     return false;
   }
   return true;
 }
 
-bool launchesAtLogin() {
-  if (!isBundled())
-    return false;
-  return [SMAppService agentServiceWithPlistName:@FOMOSNAP_AGENT_PLIST_NAME]
-             .status == SMAppServiceStatusEnabled;
-}
+bool launchesAtLogin() { return QFile::exists(agentPlistPath()); }
 
 } // namespace mac
