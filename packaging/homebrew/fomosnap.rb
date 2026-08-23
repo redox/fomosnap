@@ -27,6 +27,8 @@ class Fomosnap < Formula
            # Qt is a declared dependency, so the keg must not carry a
            # second copy of it inside the bundle.
            "-DFOMOSNAP_BUNDLE_QT=OFF",
+           # The smoke suite and the dev tools are not part of the install.
+           "-DBUILD_TESTING=OFF",
            *std_cmake_args(install_prefix: prefix)
     system "cmake", "--build", "build", "--parallel"
     system "cmake", "--install", "build", "--prefix", prefix
