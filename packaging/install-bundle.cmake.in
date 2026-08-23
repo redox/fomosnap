@@ -1,0 +1,39 @@
+# Runs at install time, after CMake has rewritten the bundle's linked library
+# paths. That rewrite invalidates the signature the build applied, and Screen
+# Recording is granted to the signature -- an installed app that is not
+# re-signed silently loses the permission and cannot capture anything.
+#
+# macdeployqt copies Qt into the bundle before signing, so what gets signed is
+# also what runs on a machine without Homebrew.
+
+set(bundle "${CMAKE_INSTALL_PREFIX}/FOMOsnap.app")
+if(NOT IS_DIRECTORY "${bundle}")
+  message(FATAL_ERROR "No bundle to finish at ${bundle}")
+endif()
+
+message(STATUS "Bundling Qt into ${bundle}")
+execute_process(
+  COMMAND "@MACDEPLOYQT@" "${bundle}" -always-overwrite
+  RESULT_VARIABLE deployed
+  OUTPUT_QUIET
+)
+if(NOT deployed EQUAL 0)
+  message(FATAL_ERROR "macdeployqt failed (${deployed})")
+endif()
+
+message(STATUS "Signing ${bundle}")
+execute_process(
+  COMMAND codesign --force --deep --sign - --timestamp=none "${bundle}"
+  RESULT_VARIABLE signed
+)
+if(NOT signed EQUAL 0)
+  message(FATAL_ERROR "codesign failed (${signed})")
+endif()
+
+execute_process(
+  COMMAND codesign --verify "${bundle}"
+  RESULT_VARIABLE verified
+)
+if(NOT verified EQUAL 0)
+  message(FATAL_ERROR "The installed bundle does not verify (${verified})")
+endif()

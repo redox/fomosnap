@@ -184,7 +184,12 @@ target_compile_features(stitch-replay PRIVATE cxx_std_23)
 target_compile_options(stitch-replay PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(stitch-replay PRIVATE Qt6::Core Qt6::Gui)
 
+find_program(MACDEPLOYQT macdeployqt HINTS "${QT_HOST_PATH}/bin"
+  "${CMAKE_PREFIX_PATH}/bin" REQUIRED)
+configure_file(packaging/install-bundle.cmake.in install-bundle.cmake @ONLY)
+
 install(TARGETS fomosnap
   BUNDLE DESTINATION "."
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
+install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/install-bundle.cmake")
