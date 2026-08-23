@@ -55,8 +55,15 @@ Screen Recording is a TCC permission granted to the app's **code signature**,
 not its path. Two consequences worth knowing before debugging a "capture
 returns nothing" report:
 
-- The build ad-hoc signs `FOMOsnap.app` after linking. A rebuild changes the
-  signature, so macOS may ask again.
+- The build signs `FOMOsnap.app` after linking with `FOMOSNAP_CODESIGN_IDENTITY`
+  (default `-`, ad-hoc). Ad-hoc has no stable identity, so every rebuild is a
+  new app to TCC and re-prompts; a real identity keeps the grant.
+- **The agent must never gate on the permission at launch.** It did once: the
+  prompt appeared at login, the process exited non-zero because the permission
+  was missing, launchd restarted it under `KeepAlive`, and it prompted again --
+  a dialog loop the user could only escape by booting the job out. The check
+  belongs in the capture path, which is where
+  `runAgentSurvivesMissingPermission` holds it.
 - Never change `FOMOSNAP_BUNDLE_ID` casually: it is the TCC identity, and
   changing it makes every user re-approve.
 

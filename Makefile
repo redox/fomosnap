@@ -7,6 +7,9 @@ PREFIX ?= /Applications
 GENERATOR ?= Ninja
 # Homebrew's Qt is not in CMake's default search path.
 QT_PREFIX ?= $(shell brew --prefix qt 2>/dev/null)
+# "-" is ad-hoc: no stable identity, so macOS re-asks for Screen Recording on
+# every rebuild. Override with a real identity to keep the grant.
+FOMOSNAP_CODESIGN_IDENTITY ?= -
 APP := $(BUILD_DIR)/FOMOsnap.app
 
 CMAKE ?= cmake
@@ -33,6 +36,7 @@ configure:
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
 		-DCMAKE_PREFIX_PATH="$(QT_PREFIX)" \
+		-DFOMOSNAP_CODESIGN_IDENTITY="$(FOMOSNAP_CODESIGN_IDENTITY)" \
 		-DCMAKE_INSTALL_PREFIX=$(PREFIX)
 
 build: configure

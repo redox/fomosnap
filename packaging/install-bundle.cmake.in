@@ -27,7 +27,8 @@ endif()
 
 message(STATUS "Signing ${bundle}")
 execute_process(
-  COMMAND codesign --force --deep --sign - --timestamp=none "${bundle}"
+  COMMAND codesign --force --deep --sign "@FOMOSNAP_CODESIGN_IDENTITY@"
+          --timestamp=none "${bundle}"
   RESULT_VARIABLE signed
 )
 if(NOT signed EQUAL 0)

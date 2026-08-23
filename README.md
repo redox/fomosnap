@@ -81,8 +81,27 @@ FOMOsnap asks for **Screen Recording** the first time it captures. macOS cannot
 grant this to a running process, so the first run explains, opens System
 Settings, and exits — grant it there and start FOMOsnap again.
 
-The permission is attached to the app's code signature, not its path. A local
-rebuild changes that signature, so macOS may ask again after one.
+The permission is attached to the app's **code signature**, not its path. The
+default signature is ad-hoc, which has no stable identity: its hash changes with
+the binary, so every rebuild or `brew upgrade` looks like a different app and
+macOS asks again. That is also why stale FOMOsnap entries pile up in
+**System Settings > Privacy & Security > Screen Recording** — they are safe to
+remove.
+
+To stop the re-asking, build with a real signing identity:
+
+```bash
+security find-identity -v -p codesigning     # what you have
+make build FOMOSNAP_CODESIGN_IDENTITY="Developer ID Application: ..."
+```
+
+A self-signed certificate made in Keychain Access works too; it only has to be
+stable, not trusted by Apple.
+
+The agent never asks for the permission at launch, only when a capture is
+actually taken. Asking at launch meant prompting at login, exiting because the
+permission was missing, and being restarted by launchd — prompting again,
+indefinitely.
 
 ## Install
 

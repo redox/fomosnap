@@ -130,13 +130,21 @@ set_target_properties(fomosnap PROPERTIES
   MACOSX_BUNDLE_ICON_FILE "FOMOsnap"
 )
 
-# TCC identifies the app by its code signature. Without one, macOS re-asks for
-# Screen Recording on every rebuild; an ad-hoc signature at least keeps the
-# grant across launches of the same build.
+# TCC identifies the app by its code signature, so the signing identity decides
+# how often macOS re-asks for Screen Recording.
+#
+# The ad-hoc default ("-") has no stable identity: its hash changes with the
+# binary, so every rebuild looks like a different app and the permission has to
+# be granted again. Set this to a real signing identity -- a Developer ID, or a
+# self-signed certificate from Keychain Access -- and the grant survives
+# rebuilds. `security find-identity -v -p codesigning` lists what is available.
+set(FOMOSNAP_CODESIGN_IDENTITY "-" CACHE STRING
+  "codesign identity; \"-\" is ad-hoc and re-prompts for TCC on every rebuild")
+
 add_custom_command(TARGET fomosnap POST_BUILD
-  COMMAND codesign --force --sign - --timestamp=none
-          "$<TARGET_BUNDLE_DIR:fomosnap>"
-  COMMENT "Ad-hoc signing FOMOsnap.app"
+  COMMAND codesign --force --sign "${FOMOSNAP_CODESIGN_IDENTITY}"
+          --timestamp=none "$<TARGET_BUNDLE_DIR:fomosnap>"
+  COMMENT "Signing FOMOsnap.app with identity ${FOMOSNAP_CODESIGN_IDENTITY}"
   VERBATIM
 )
 
