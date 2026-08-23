@@ -1115,11 +1115,14 @@ CaptureEditor::annotationHandles(const Annotation &annotation) const {
   // the wrapping actually moves.
   if (annotation.kind == Annotation::Kind::Text) {
     // Text moved or loaded past the canvas edge would put this handle out of
-    // reach, maybe off the screen itself; pull it back to the edge so the
-    // wrap can always be dragged back in.
+    // reach, maybe off the screen itself; pull it back inside every edge so
+    // the wrap can always be dragged back in. Multiline text can overrun the
+    // bottom even when its width is already inside the right edge.
     QPointF handle = bounds.bottomRight();
     if (selection_.width() > 0)
-      handle.setX(std::min(handle.x(), selection_.width() - 4.0));
+      handle.setX(std::clamp(handle.x(), 4.0, selection_.width() - 4.0));
+    if (selection_.height() > 0)
+      handle.setY(std::clamp(handle.y(), 4.0, selection_.height() - 4.0));
     return {{handle, Interaction::ResizeEnd}};
   }
   // A counter is a disc: any corner sets its size, and sides would say

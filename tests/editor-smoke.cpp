@@ -1942,6 +1942,115 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   return true;
 }
 
+/** A multiline text layer whose bottom runs below the canvas keeps its wrap
+ *  handle on the canvas, where it can still be dragged inward. */
+bool runTextVerticalOverrunHandleCheck(QApplication &application,
+                                       QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  const QRectF selection(100, 100, 550, 370);
+  Annotation text;
+  text.kind = Annotation::Kind::Text;
+  text.start = {80, 330};
+  text.text = QStringLiteral("first line\nsecond line\nthird line");
+  text.color = QColor(QStringLiteral("#ff375f"));
+  text.size = 5;
+  text.textWidth = 180.0;
+  text.textBackground = TextBackground::Plain;
+  text.id = 1;
+  OperationLog log;
+  Operation cropOp;
+  cropOp.type = Operation::Type::Crop;
+  cropOp.crop = selection;
+  log.ops.push_back(cropOp);
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {text};
+  log.ops.push_back(std::move(annotate));
+  log.index = log.ops.size();
+  log.nextId = 2;
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                       QuickOutputMode::None, log);
+  editor.setSuppressSnapshots(true);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+
+  // Red text is the only saturated red below the toolbar. Its visible ink
+  // reaches the canvas bottom, while the real bottom-right corner is clipped
+  // below it, which is the state the bug report showed.
+  const QImage initial = editor.grab().toImage();
+  QRect ink;
+  for (int y = 90; y < initial.height(); ++y)
+    for (int x = 0; x < initial.width(); ++x) {
+      const QColor color = initial.pixelColor(x, y);
+      if (color.red() > 200 && color.green() < 120)
+        ink |= QRect(x, y, 1, 1);
+    }
+  if (ink.isNull()) {
+    error = QStringLiteral("Vertically overrun text did not render");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ink.center());
+  application.processEvents();
+  if (editor.selectedCountForTest() != 1) {
+    error = QStringLiteral("Vertically overrun text could not be selected");
+    return false;
+  }
+
+  // The rescued handle should be near the visible text's right edge and the
+  // canvas bottom. Before the vertical clamp it remains below the canvas, so
+  // no point in this reachable neighborhood advertises a horizontal resize.
+  QPoint handleSpot;
+  for (int y = ink.bottom() - 28;
+       y <= std::min(editor.height() - 1, ink.bottom() + 12) &&
+       handleSpot.isNull();
+       y += 2) {
+    for (int x = std::max(0, ink.right() - 36);
+         x <= std::min(editor.width() - 1, ink.right() + 36); x += 2) {
+      QTest::mouseMove(&editor, QPoint(x, y), 10);
+      application.processEvents();
+      if (editor.cursor().shape() == Qt::SizeHorCursor) {
+        handleSpot = {x, y};
+        break;
+      }
+    }
+  }
+  if (handleSpot.isNull()) {
+    error = QStringLiteral(
+        "Text below the canvas did not keep a reachable wrap handle");
+    return false;
+  }
+
+  const int operationsBefore = editor.operationLog().size();
+  const QPoint inward(std::max(0, handleSpot.x() - 70), handleSpot.y());
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handleSpot);
+  QTest::mouseMove(&editor, inward, 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, inward);
+  application.processEvents();
+  const QVector<Operation> &operations = editor.operationLog();
+  if (operations.size() != operationsBefore + 1 ||
+      operations.constLast().type != Operation::Type::Patch ||
+      operations.constLast().annotations.size() != 1 ||
+      operations.constLast().annotations.constFirst().textWidth >=
+          text.textWidth) {
+    error = QStringLiteral(
+        "Dragging the rescued vertical handle did not resize text inward");
+    return false;
+  }
+  return true;
+}
+
 /** The view holds still while a text draft is open. */
 bool runDraftViewLockCheck(QApplication &application, QString &error) {
   CaptureData capture;
@@ -2110,7 +2219,7 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
   // The committing click above did only that; a second click opens the next
   // editor, with the text tool still armed.
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(450, 300));
+                    toScreen({325, 180}));
   application.processEvents();
   // The arrow button sits in the spaced toolbar above the capture.
   QTest::keyClicks(QApplication::focusWidget(), toolbar.text);
@@ -8541,6 +8650,10 @@ int main(int argc, char **argv) {
   if (!runDraftPillStaysPutCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 12;
+  }
+  if (!runTextVerticalOverrunHandleCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 13;
   }
   if (!runTextOverrunHandleCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
