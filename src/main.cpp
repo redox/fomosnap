@@ -50,9 +50,10 @@ public:
     signalFd_ = fds_[0];
 
     struct sigaction sa{};
-    sa.sa_handler = [](int) {
+    // The signal number is the message, so one socket can carry all of them.
+    sa.sa_handler = [](int signo) {
       const int savedErrno = errno;
-      const char byte = 1;
+      const char byte = static_cast<char>(signo);
       const int fd = signalFd_;
       if (fd >= 0)
         static_cast<void>(::write(fd, &byte, sizeof(byte)));
@@ -62,6 +63,7 @@ public:
     sa.sa_flags = SA_RESTART;
     sigintInstalled_ = ::sigaction(SIGINT, &sa, &previousSigint_) == 0;
     sigtermInstalled_ = ::sigaction(SIGTERM, &sa, &previousSigterm_) == 0;
+    sigusr1Installed_ = ::sigaction(SIGUSR1, &sa, &previousSigusr1_) == 0;
     if (!sigintInstalled_ && !sigtermInstalled_) {
       closeSockets();
       return;
@@ -71,23 +73,42 @@ public:
     connect(notifier_, &QSocketNotifier::activated, this, [this] {
       notifier_->setEnabled(false);
       char bytes[32];
-      while (::read(fds_[1], bytes, sizeof(bytes)) > 0) {
+      bool stopRequested = false;
+      bool triggerRequested = false;
+      for (ssize_t count; (count = ::read(fds_[1], bytes, sizeof(bytes))) > 0;) {
+        for (ssize_t index = 0; index < count; ++index) {
+          if (bytes[index] == static_cast<char>(SIGUSR1))
+            triggerRequested = true;
+          else
+            stopRequested = true;
+        }
       }
-      if (action_)
-        action_();
-      else
-        QCoreApplication::quit();
+      if (triggerRequested && triggerAction_)
+        triggerAction_();
+      if (stopRequested) {
+        if (action_)
+          action_();
+        else
+          QCoreApplication::quit();
+      }
       notifier_->setEnabled(true);
     });
   }
 
+  /// What SIGINT/SIGTERM mean. Default: quit.
   void setAction(Action action) { action_ = std::move(action); }
+  /// What SIGUSR1 means. The agent uses it to open or dismiss the overlay
+  /// without the hotkey, which is how an external launcher can drive it and
+  /// how the headless suite exercises the warm path.
+  void setTriggerAction(Action action) { triggerAction_ = std::move(action); }
 
   ~PosixSignalNotifier() override {
     if (sigintInstalled_)
       ::sigaction(SIGINT, &previousSigint_, nullptr);
     if (sigtermInstalled_)
       ::sigaction(SIGTERM, &previousSigterm_, nullptr);
+    if (sigusr1Installed_)
+      ::sigaction(SIGUSR1, &previousSigusr1_, nullptr);
     closeSockets();
   }
 
@@ -106,10 +127,13 @@ private:
   static inline volatile sig_atomic_t signalFd_ = -1;
   struct sigaction previousSigint_{};
   struct sigaction previousSigterm_{};
+  struct sigaction previousSigusr1_{};
   bool sigintInstalled_ = false;
   bool sigtermInstalled_ = false;
+  bool sigusr1Installed_ = false;
   QSocketNotifier *notifier_ = nullptr;
   Action action_;
+  Action triggerAction_;
 };
 
 /// Everything one capture invocation needs, parsed once so the resident agent
@@ -600,6 +624,33 @@ int main(int argc, char **argv) {
   options.filePath = filePath;
 
   if (agentMode) {
+    // One agent per user. Carbon delivers a hotkey to every process that
+    // registered it, so a second agent means both open an overlay and the
+    // single-instance handover then asks the other to give up the screen: the
+    // overlay appears and vanishes, and the capture looks like it did nothing.
+    const QString agentRuntime = secureRuntimeDirectory();
+    if (agentRuntime.isEmpty()) {
+      qCritical() << "Could not create private runtime directory";
+      return 1;
+    }
+    static QLockFile agentLock(
+        QDir(agentRuntime).filePath(QStringLiteral("fomosnap.agent")));
+    agentLock.setStaleLockTime(0);
+    if (!agentLock.tryLock(0)) {
+      qint64 holder = 0;
+      QString host;
+      QString application;
+      agentLock.getLockInfo(&holder, &host, &application);
+      // Exit 0, not an error: "an agent is already running" is the desired end
+      // state, and a non-zero exit would have launchd restart this forever.
+      qInfo().noquote()
+          << QStringLiteral("A FOMOsnap agent is already running%1; leaving it "
+                            "in charge.")
+                 .arg(holder != 0 ? QStringLiteral(" (pid %1)").arg(holder)
+                                  : QString());
+      return 0;
+    }
+
     // The agent outlives every overlay it opens, so closing one must not end
     // the process, and a termination request only dismisses the overlay.
     // The agent is a background daemon: a permanent Dock tile for a process
@@ -607,6 +658,8 @@ int main(int argc, char **argv) {
     // Dock icon, so the app is visible where a user expects to find it.
     mac::becomeAccessoryApp();
     application.setQuitOnLastWindowClosed(false);
+    // SIGUSR1 opens or dismisses the overlay, exactly as the hotkey does.
+    signalNotifier.setTriggerAction([] { onHotkey(); });
     // A termination request means "give up the screen" while an overlay is up
     // -- that is how a second FOMOsnap takes over -- and "stop being resident"
     // when there is nothing to give up. Without the second half, an idle agent
