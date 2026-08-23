@@ -1,8 +1,9 @@
 /** @fileoverview Display discovery, window discovery, and pixel capture
  *  through ScreenCaptureKit. Replaces the Wayland `ext-image-copy-capture`
- *  path: a screenshot is one `SCScreenshotManager` call, and the frame is
- *  taken before the overlay window is ever created, so FOMOsnap still cannot
- *  appear in its own capture. */
+ *  path: a screenshot is one `SCScreenshotManager` call, and the first still
+ *  is taken before the overlay window is ever created. Live grabs during
+ *  scroll capture omit this process's windows, so the overlay cannot freeze
+ *  every crop as its own backing store. */
 
 #include "mac-platform.hpp"
 
@@ -147,6 +148,22 @@ void fillMonitor(MonitorInfo &monitor, SCDisplay *display) {
   return nil;
 }
 
+[[nodiscard]] NSArray<SCWindow *> *windowsOwnedByThisApp(
+    SCShareableContent *content) {
+  NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+  const pid_t selfPid = [[NSProcessInfo processInfo] processIdentifier];
+  NSMutableArray<SCWindow *> *own = [NSMutableArray array];
+  for (SCWindow *window in content.windows) {
+    SCRunningApplication *owner = window.owningApplication;
+    if (!owner)
+      continue;
+    if (owner.processID == selfPid ||
+        (bundleId && [owner.bundleIdentifier isEqualToString:bundleId]))
+      [own addObject:window];
+  }
+  return own;
+}
+
 /// Draws a CGImage into a QImage's own buffer. Format_RGB32 is 0xffRRGGBB in
 /// native byte order, which on little-endian is BGRX in memory: exactly what
 /// `kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little` writes, so this
@@ -269,8 +286,13 @@ bool focusedDisplay(MonitorInfo &monitor, QString &error) {
   return !monitor.geometry.size().isEmpty();
 }
 
-bool captureDisplay(const MonitorInfo &monitor, QImage &image, QString &error) {
-  SCShareableContent *content = shareableContent(error);
+bool captureDisplay(const MonitorInfo &monitor, QImage &image, QString &error,
+                    bool excludeOwnWindows) {
+  // A live grab needs the window list as it is now: the 250 ms content cache
+  // can still hold the pre-overlay snapshot, which would exclude nothing and
+  // capture the overlay's frozen backing store as the page.
+  SCShareableContent *content = excludeOwnWindows ? fetchShareableContent(error)
+                                                  : shareableContent(error);
   if (!content)
     return false;
   SCDisplay *display = findDisplay(content, monitor.displayId);
@@ -279,8 +301,11 @@ bool captureDisplay(const MonitorInfo &monitor, QImage &image, QString &error) {
                 .arg(monitor.displayId);
     return false;
   }
+  NSArray<SCWindow *> *excluded =
+      excludeOwnWindows ? windowsOwnedByThisApp(content) : @[];
   SCContentFilter *filter =
-      [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+      [[SCContentFilter alloc] initWithDisplay:display
+                             excludingWindows:excluded];
   return captureStill(filter, configurationFor(monitor), image, error);
 }
 
@@ -373,7 +398,7 @@ bool OutputCapture::grab(QImage &image, QString &error, int timeoutMs) {
     error = QStringLiteral("Capture session is not open");
     return false;
   }
-  return mac::captureDisplay(state_->monitor, image, error);
+  return mac::captureDisplay(state_->monitor, image, error, true);
 }
 
 bool OutputCapture::isOpen() const { return state_ && state_->open; }

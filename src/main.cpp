@@ -481,8 +481,7 @@ int main(int argc, char **argv) {
   const QCommandLineOption scrollOption(
       QStringLiteral("scroll"),
       QStringLiteral("Capture a scrolling region and stitch it into one tall "
-                     "image, then open it in the editor. Not yet implemented "
-                     "on macOS."));
+                     "image, then open it in the editor."));
   parser.addOption(scrollOption);
   const QCommandLineOption agentOption(
       QStringLiteral("agent"),

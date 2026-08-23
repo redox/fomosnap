@@ -24,6 +24,7 @@ class QWheelEvent;
 class QPainter;
 
 class InlineTextEdit;
+class ScrollCapturePanel;
 /// Corner radius for the dashed selection box around `annotation`, drawn
 /// `inset` px outside its bounds. A rounded rectangle or text pill inside a
 /// square box reads as a mistake, and while the radius is being set the box
@@ -477,9 +478,7 @@ private:
   [[nodiscard]] CaptureKind selectKind() const;
   /// The surface minus the notch: where top-edge chrome may be drawn.
   [[nodiscard]] QRect chromeBounds() const;
-  /// The scroll-capture panel, once macOS scroll capture exists. Always null
-  /// today, and every scroll path is written to tolerate that.
-  QWidget *scrollPanel_ = nullptr;
+  ScrollCapturePanel *scrollPanel_ = nullptr;
   CaptureMode captureMode_ = CaptureMode::Region;
   /// Which tab produced the capture being edited; lit in the edit phase.
   SelectTab editedKind_ = SelectTab::Region;

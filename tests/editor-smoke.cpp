@@ -5176,12 +5176,9 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
   }
   editor.close();
 
-  // Scrolling Region is a mode of the same surface. Capturing one needs
-  // synthetic wheel input, which macOS does not have yet, so drawing a region
-  // in scroll mode reports that and stays armed in scroll mode rather than
-  // silently switching the user to a different capture. Everything downstream
-  // of a stitched image still works, because a stitched image is just an
-  // image handed to the editor.
+  // Scrolling Region is a mode of the same surface: drawing a region in it
+  // brings the scroll panel up in place; its tabs leave it; dismissing it
+  // returns to selecting in scroll mode.
   {
     CaptureEditor scrollEditor(capture, CaptureEditor::CaptureMode::Scroll);
     scrollEditor.resize(800, 600);
@@ -5197,10 +5194,18 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
     QTest::mouseRelease(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(500, 400));
     application.processEvents();
+    if (!scrollEditor.scrollPanelActiveForTest() ||
+        !scrollEditor.selectingForTest()) {
+      error = QStringLiteral("A region in scroll mode did not bring the scroll "
+                             "panel up");
+      return false;
+    }
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
+    application.processEvents();
     if (scrollEditor.scrollPanelActiveForTest() ||
-        !scrollEditor.selectingForTest() || !scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("A region in scroll mode did not stay armed in "
-                             "scroll mode");
+        !scrollEditor.scrollModeForTest() || !scrollEditor.isVisible()) {
+      error = QStringLiteral("Esc on the scroll panel did not return to "
+                             "selecting a scrolling region");
       return false;
     }
     // Space walks Region -> Scroll -> Window -> Region.

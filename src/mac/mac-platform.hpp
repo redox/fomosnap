@@ -34,9 +34,14 @@ void openScreenRecordingSettings();
  */
 [[nodiscard]] bool focusedDisplay(MonitorInfo &monitor, QString &error);
 
-/** Captures one display at full backing resolution, without the cursor. */
+/** Captures one display at full backing resolution, without the cursor.
+ *  `excludeOwnWindows` drops this process's windows so a live grab (scroll
+ *  capture) sees the page under the overlay rather than the overlay's own
+ *  backing store. The first screenshot of a session leaves it false: the
+ *  overlay does not exist yet, and a pin should still be capturable. */
 [[nodiscard]] bool captureDisplay(const MonitorInfo &monitor, QImage &image,
-                                  QString &error);
+                                  QString &error,
+                                  bool excludeOwnWindows = false);
 
 /**
  * On-screen windows of the current Space that intersect `monitor`, in

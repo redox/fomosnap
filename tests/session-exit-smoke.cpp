@@ -320,6 +320,42 @@ bool runSecondAgentDeclines(const QProcessEnvironment &environment,
   return true;
 }
 
+/// --scroll is a real capture session now (the overlay plus the scroll
+/// panel). Teardown that only closed the area editor has already hung once;
+/// this path has to die on SIGTERM the same way.
+bool runScrollSessionExits(const QProcessEnvironment &environment,
+                           QString &error) {
+  QProcess process;
+  process.setProcessEnvironment(environment);
+  process.setProgram(QStringLiteral(FOMOSNAP_EXECUTABLE));
+  process.setArguments({QStringLiteral("--scroll")});
+  process.start();
+  if (!process.waitForStarted(5000)) {
+    error = QStringLiteral("Could not start --scroll: %1")
+                .arg(process.errorString());
+    return false;
+  }
+
+  if (process.waitForFinished(1500)) {
+    error = QStringLiteral("--scroll exited on its own with no input");
+    return false;
+  }
+
+  ::kill(static_cast<pid_t>(process.processId()), SIGTERM);
+  if (!process.waitForFinished(kExitDeadlineMs)) {
+    process.kill();
+    process.waitForFinished(5000);
+    error = QStringLiteral("--scroll ignored SIGTERM for %1 ms")
+                .arg(kExitDeadlineMs);
+    return false;
+  }
+  if (process.exitStatus() != QProcess::NormalExit) {
+    error = QStringLiteral("--scroll crashed instead of quitting");
+    return false;
+  }
+  return true;
+}
+
 /// Usage errors must not reach the overlay at all.
 bool runUsageErrorExits(const QProcessEnvironment &environment,
                         QString &error) {
@@ -358,6 +394,7 @@ bool runSessionExitSmoke(QString &error) {
       childEnvironment(home.path(), sourcePath);
   return runQuickOutputExits(environment, error) &&
          runTerminationExits(environment, sourcePath, error) &&
+         runScrollSessionExits(environment, error) &&
          runAgentExits(environment, error) &&
          runAgentSurvivesMissingPermission(environment, error) &&
          runSecondAgentDeclines(environment, error) &&
