@@ -167,6 +167,48 @@ bool runAgentExits(const QProcessEnvironment &environment, QString &error) {
   return true;
 }
 
+/// The agent must go resident without asking for Screen Recording. Asking at
+/// launch meant: prompt at login, exit non-zero because the permission is not
+/// held, launchd restarts it under KeepAlive, prompt again -- a loop that
+/// spammed the user with system dialogs until the job was booted out.
+///
+/// The child gets a home with no TCC grant of its own; what matters is that it
+/// stays up rather than exiting, whichever way the permission resolves.
+bool runAgentSurvivesMissingPermission(const QProcessEnvironment &environment,
+                                       QString &error) {
+  QProcess process;
+  process.setProcessEnvironment(environment);
+  process.setProgram(QStringLiteral(FOMOSNAP_EXECUTABLE));
+  process.setArguments(
+      {QStringLiteral("--agent"), QStringLiteral("--hotkey"),
+       QStringLiteral("ctrl+alt+shift+f14")});
+  process.start();
+  if (!process.waitForStarted(5000)) {
+    error = QStringLiteral("Could not start the agent: %1")
+                .arg(process.errorString());
+    return false;
+  }
+
+  // Long enough to be past any startup-time permission gate.
+  if (process.waitForFinished(2500)) {
+    error = QStringLiteral(
+                "The agent exited at startup (%1) instead of going resident; a "
+                "permission gate there restarts under launchd and prompts "
+                "forever")
+                .arg(process.exitCode());
+    return false;
+  }
+
+  ::kill(static_cast<pid_t>(process.processId()), SIGTERM);
+  if (!process.waitForFinished(kExitDeadlineMs)) {
+    process.kill();
+    process.waitForFinished(5000);
+    error = QStringLiteral("The agent would not stop after the check");
+    return false;
+  }
+  return true;
+}
+
 /// The login item is a user LaunchAgent. It must name --agent explicitly:
 /// registering the app bare would launch an ordinary capture at login and put
 /// a selection overlay across the screen. launchctl is skipped here; this
@@ -267,6 +309,7 @@ bool runSessionExitSmoke(QString &error) {
   return runQuickOutputExits(environment, error) &&
          runTerminationExits(environment, sourcePath, error) &&
          runAgentExits(environment, error) &&
+         runAgentSurvivesMissingPermission(environment, error) &&
          runLoginItemRoundTrip(home.path(), error) &&
          runUsageErrorExits(environment, error);
 }

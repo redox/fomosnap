@@ -234,6 +234,29 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
     return lockResult.exitCode;
   }
 
+  // Screen Recording cannot be granted in-process: the first ask raises the
+  // system prompt and the grant only applies to a fresh launch.
+  //
+  // Checked here, per capture, rather than at startup. The agent must not ask
+  // at launch: it would raise the prompt at login, exit non-zero when the
+  // permission is missing, and be restarted by launchd -- prompting again,
+  // forever. Editing an image needs no permission at all.
+  if (!options.editingImage) {
+    QString permissionError;
+    if (!mac::ensureScreenRecordingAccess(permissionError)) {
+      qCritical().noquote() << permissionError;
+      // Only the first time in this process: a resident agent that reopened
+      // System Settings on every hotkey press would be its own kind of spam.
+      static bool openedSettings = false;
+      if (!openedSettings) {
+        openedSettings = true;
+        mac::openScreenRecordingSettings();
+      }
+      sendCaptureNotification(permissionError);
+      return 1;
+    }
+  }
+
   CaptureData capture;
   OperationLog restoredLog;
   QString error;
@@ -568,17 +591,6 @@ int main(int argc, char **argv) {
   }
   if (!loadCaptureFonts())
     return 1;
-
-  // Screen Recording cannot be granted in-process, so a capture that needs it
-  // has to stop here and ask. Editing an image needs no permission at all.
-  if (!editingImage) {
-    QString permissionError;
-    if (!mac::ensureScreenRecordingAccess(permissionError)) {
-      qCritical().noquote() << permissionError;
-      mac::openScreenRecordingSettings();
-      return 1;
-    }
-  }
 
   SessionOptions options;
   options.captureMode = captureMode;

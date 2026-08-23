@@ -206,6 +206,10 @@ bool setLaunchAtLogin(bool enabled, QString &error) {
           // idle agent exits cleanly and should stay exited.
           "  <key>KeepAlive</key>\n"
           "  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n"
+          // A floor on restarts. If the agent ever does fail at launch, this
+          // is the difference between a slow retry and a tight loop that
+          // raises a system prompt every time round.
+          "  <key>ThrottleInterval</key>\n  <integer>30</integer>\n"
           "  <key>ProcessType</key>\n  <string>Interactive</string>\n"
           "</dict>\n</plist>\n")
           .arg(label, executable.toHtmlEscaped());
