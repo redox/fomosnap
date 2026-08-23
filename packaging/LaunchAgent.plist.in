@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Registered through SMAppService so the resident agent starts at login and
+     appears in System Settings > General > Login Items.
+
+     BundleProgram, not Program: the path is relative to the bundle, so the
+     login item survives the app moving -- which it does on every Homebrew
+     upgrade, since the Cellar path carries the version. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>@FOMOSNAP_AGENT_LABEL@</string>
+  <key>BundleProgram</key>
+  <string>Contents/MacOS/@FOMOSNAP_APP_NAME@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@FOMOSNAP_APP_NAME@</string>
+    <!-- Without this the login item would launch an ordinary capture and put
+         a selection overlay on screen at login. -->
+    <string>--agent</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart it if it dies, but respect a deliberate quit: SIGTERM on an idle
+       agent is how the user stops it, and that is a clean exit. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+</dict>
+</plist>

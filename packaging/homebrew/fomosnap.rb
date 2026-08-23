@@ -33,9 +33,15 @@ class Fomosnap < Formula
     system "cmake", "--build", "build", "--parallel"
     system "cmake", "--install", "build", "--prefix", prefix
 
-    # The executable must be launched from inside the bundle: Screen Recording
-    # is granted to the bundle's identity, and a copied-out binary has none.
-    bin.install_symlink prefix/"FOMOsnap.app/Contents/MacOS/FOMOsnap" => "fomosnap"
+    # A wrapper that execs, not a symlink. Launched through a symlink, dyld
+    # reports the symlink as the executable path, so +[NSBundle mainBundle]
+    # finds no bundle -- which silently disables notifications and the login
+    # item. exec'ing the real path inside the bundle keeps the identity.
+    (bin/"fomosnap").write <<~SH
+      #!/bin/bash
+      exec "#{opt_prefix}/FOMOsnap.app/Contents/MacOS/FOMOsnap" "$@"
+    SH
+    chmod 0755, bin/"fomosnap"
   end
 
   def caveats
@@ -43,9 +49,11 @@ class Fomosnap < Formula
       FOMOsnap needs Screen Recording permission. The first capture explains
       and opens System Settings; grant it there, then start FOMOsnap again.
 
-      To hold a global hotkey, run the resident agent:
-        fomosnap --agent
-        fomosnap --install-agent   # and start it at login
+      The default shortcut is Ctrl+Cmd+4 (Cmd+Shift+3/4/5 belong to macOS).
+
+      To hold that shortcut, run the resident agent:
+        fomosnap --agent                   # foreground, to try it
+        fomosnap --install-agent           # and start it at login
 
       The app bundle is at:
         #{opt_prefix}/FOMOsnap.app
