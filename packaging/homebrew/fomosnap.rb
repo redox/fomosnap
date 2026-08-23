@@ -6,8 +6,8 @@
 class Fomosnap < Formula
   desc "Native macOS screenshot and annotation overlay, ported from Omasnap"
   homepage "https://github.com/redox/fomosnap"
-  url "https://github.com/redox/fomosnap/archive/refs/tags/v2.0.0.tar.gz"
-  sha256 "fd8d92e93dc29ccb98f32b7fe8aa0b3c200a15f603afe36ae0148ab5784da29c"
+  url "https://github.com/redox/fomosnap/archive/refs/tags/v2.0.1.tar.gz"
+  sha256 "8aaaafe56b37ec091b302a7a8c260968555eab9b9fb1663a5ac73f4a92d49e5c"
   license "MIT"
   head "https://github.com/redox/fomosnap.git", branch: "main"
 
@@ -45,6 +45,7 @@ class Fomosnap < Formula
     <<~EOS
       FOMOsnap needs Screen Recording permission. The first capture explains
       and opens System Settings; grant it there, then start FOMOsnap again.
+      Auto-scroll also needs Accessibility; grant it the same way.
 
       The default shortcut is Ctrl+Cmd+4 (Cmd+Shift+3/4/5 belong to macOS).
 
