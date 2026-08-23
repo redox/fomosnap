@@ -24,10 +24,6 @@ class QWheelEvent;
 class QPainter;
 
 class InlineTextEdit;
-class ScrollCapturePanel;
-namespace LayerShellQt {
-class Window;
-}
 /// Corner radius for the dashed selection box around `annotation`, drawn
 /// `inset` px outside its bounds. A rounded rectangle or text pill inside a
 /// square box reads as a mistake, and while the radius is being set the box
@@ -234,9 +230,11 @@ public:
   [[nodiscard]] int selectedCountForTest() const {
     return static_cast<int>(selectedAnnotations_.size());
   }
-  /// The layer surface this editor lives on. The scroll state toggles its
-  /// keyboard interactivity and input mask while the page underneath is live.
-  void setLayerWindow(LayerShellQt::Window *layer) { layer_ = layer; }
+  /// Height at the top of the screen hidden behind the display's notch. The
+  /// chrome that hangs off the top edge is pushed below it; the canvas still
+  /// covers the whole surface, because those pixels are captured even though
+  /// nothing drawn there can be seen.
+  void setSafeAreaTop(qreal inset) { safeAreaTop_ = inset; }
   /// Whether the select phase is in scroll mode. Test accessor.
   [[nodiscard]] bool scrollModeForTest() const { return scrollMode_; }
   /// Hands a stitched image to the editor as the scroll panel would. Test hook.
@@ -469,6 +467,7 @@ private:
   /// not a change of tool.
   Tool toolBeforeEyedropper_ = Tool::Select;
   bool scrollMode_ = false;
+  qreal safeAreaTop_ = 0.0;
   /// The image being edited was handed to the editor (stitched scroll,
   /// shelved capture) rather than cut from the frozen screen.
   bool handedImage_ = false;
@@ -476,8 +475,11 @@ private:
   /// stitched result replaces) so the screen can be captured again.
   MonitorInfo liveMonitor_;
   [[nodiscard]] CaptureKind selectKind() const;
-  LayerShellQt::Window *layer_ = nullptr;
-  ScrollCapturePanel *scrollPanel_ = nullptr;
+  /// The surface minus the notch: where top-edge chrome may be drawn.
+  [[nodiscard]] QRect chromeBounds() const;
+  /// The scroll-capture panel, once macOS scroll capture exists. Always null
+  /// today, and every scroll path is written to tolerate that.
+  QWidget *scrollPanel_ = nullptr;
   CaptureMode captureMode_ = CaptureMode::Region;
   /// Which tab produced the capture being edited; lit in the edit phase.
   SelectTab editedKind_ = SelectTab::Region;

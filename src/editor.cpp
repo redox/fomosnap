@@ -9,7 +9,6 @@
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
 #include "recent-snaps.hpp"
-#include "scroll-capture.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -542,7 +541,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
     nextMarker_ = std::max(log.nextMarker, 1);
   }
-  setWindowTitle(QStringLiteral("Omasnap"));
+  setWindowTitle(QStringLiteral("FOMOsnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
                  Qt::WindowStaysOnTopHint);
   setAttribute(Qt::WA_TranslucentBackground);
@@ -4574,7 +4573,7 @@ QVector<CaptureTab> CaptureEditor::selectTabItems() const {
   // to the select phase in that mode. A file has no screen to go back to.
   if (capture_.source.isNull() || (phase_ == Phase::Edit && !hasLiveScreen()))
     return {};
-  return captureTabLayout(rect());
+  return captureTabLayout(chromeBounds());
 }
 
 int CaptureEditor::selectTabAt(const QPointF &position) const {
@@ -4608,6 +4607,10 @@ void CaptureEditor::activateSelectTab(SelectTab tab) {
     selectFullscreen();
     break;
   }
+}
+
+QRect CaptureEditor::chromeBounds() const {
+  return rect().adjusted(0, qRound(safeAreaTop_), 0, 0);
 }
 
 CaptureKind CaptureEditor::selectKind() const {
@@ -4647,30 +4650,15 @@ void CaptureEditor::commitRegion(const QRectF &region,
 }
 
 void CaptureEditor::startScrollCapture(const QRect &region) {
-  if (scrollPanel_ || liveMonitor_.name.isEmpty())
-    return;
-  phase_ = Phase::Select;
-  scrollMode_ = true;
-  windowMode_ = false;
-  dragging_ = false;
-  selection_ = {};
-  auto *panel = new ScrollCapturePanel(liveMonitor_, layer_, this);
-  scrollPanel_ = panel;
-  connect(panel, &ScrollCapturePanel::stitched, this,
-          [this](const QImage &image) {
-            endScrollCapture();
-            adoptStitched(image);
-          });
-  connect(panel, &ScrollCapturePanel::dismissed, this, [this] {
-    endScrollCapture();
-    setScrollMode(true);
-  });
-  connect(panel, &ScrollCapturePanel::tabRequested, this,
-          [this](CaptureKind kind) { activateSelectTab(kind); });
-  panel->show();
-  panel->raise();
-  panel->setFocus(Qt::OtherFocusReason);
-  panel->begin(region);
+  Q_UNUSED(region);
+  // Scroll capture drives the application under the region with synthetic
+  // wheel events. On macOS that means CGEventPost behind the Accessibility
+  // permission, which is not built yet. Re-arm rather than fall back to a
+  // plain region: the user asked for a scrolling capture, and quietly handing
+  // them a different mode would be worse than saying no.
+  setScrollMode(true);
+  setStatus(QStringLiteral("Scroll capture is not available on macOS yet · "
+                           "Space or a tab leaves scroll mode"));
   update();
 }
 
@@ -5146,7 +5134,7 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   paintRecents(painter);
 
   paintSelectTabs(painter);
-  drawHotkeyLegend(painter, rect(), cursor_,
+  drawHotkeyLegend(painter, chromeBounds(), cursor_,
                    {{QStringLiteral("Drag"), QStringLiteral("Area")},
                     {QStringLiteral("Space"), QStringLiteral("Window")},
                     {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
@@ -5626,7 +5614,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
                    image.topLeft() + selected.end * scale};
   }
   drawHotkeyLegend(
-      painter, rect(), cursor_,
+      painter, chromeBounds(), cursor_,
       {{QStringLiteral("V"), QStringLiteral("Select / move layer")},
        {QStringLiteral("A"), QStringLiteral("Arrow")},
        {QStringLiteral("L"), QStringLiteral("Line")},

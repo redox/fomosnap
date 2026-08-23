@@ -13,7 +13,8 @@
 #include "stitch-smoke.hpp"
 #include "stitch.hpp"
 #include "pin-lifecycle-smoke.hpp"
-#include "transform-smoke.hpp"
+#include "capture-probe-smoke.hpp"
+#include "session-exit-smoke.hpp"
 #include "eyedropper.hpp"
 
 #include <QApplication>
@@ -498,7 +499,11 @@ bool runPositionalImageTargetCheck(QString &error) {
       QStringLiteral("https:/example.com/image.png");
   const bool savedColonImage = image.save(colonPath, "PNG");
   const bool changedDirectory = QDir::setCurrent(directory.path());
-  const QString resolvedColonPath = resolveLocalImagePath(colonName);
+  // Resolved through the working directory, so it comes back with symlinks
+  // followed: macOS puts temporary directories under /var, which is itself a
+  // link to /private/var. Only the canonical forms are comparable.
+  const QString resolvedColonPath =
+      QFileInfo(resolveLocalImagePath(colonName)).canonicalFilePath();
   const bool createdRemoteLookalike =
       changedDirectory && QDir().mkpath(QStringLiteral("https:/example.com")) &&
       image.save(remoteLookalikeName, "PNG");
@@ -509,7 +514,8 @@ bool runPositionalImageTargetCheck(QString &error) {
   QDir::setCurrent(previousDirectory);
   if (!image.save(path, "PNG") || resolveLocalImagePath(path) != path ||
       resolveLocalImagePath(url) != path || !changedDirectory ||
-      resolvedColonPath != colonPath || !savedColonImage ||
+      resolvedColonPath != QFileInfo(colonPath).canonicalFilePath() ||
+      !savedColonImage ||
       !createdRemoteLookalike || !resolvedRemoteUrl.isEmpty() ||
       !resolveLocalImagePath(
            QDir(directory.path()).filePath(QStringLiteral("missing.png")))
@@ -965,16 +971,16 @@ bool runQuickOutputChecks(QString &error) {
     error = QStringLiteral("Could not create quick-output directory");
     return false;
   }
-  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
-  qputenv("OMASNAP_SCREENSHOT_DIR", directory.path().toUtf8());
+  const QByteArray previousDir = qgetenv("FOMOSNAP_SCREENSHOT_DIR");
+  qputenv("FOMOSNAP_SCREENSHOT_DIR", directory.path().toUtf8());
   outputError.clear();
   const bool saved = quickOutput(image, QuickOutputMode::Save, outputError);
   const QStringList files =
       QDir(directory.path()).entryList({QStringLiteral("*.png")}, QDir::Files);
   if (previousDir.isEmpty())
-    qunsetenv("OMASNAP_SCREENSHOT_DIR");
+    qunsetenv("FOMOSNAP_SCREENSHOT_DIR");
   else
-    qputenv("OMASNAP_SCREENSHOT_DIR", previousDir);
+    qputenv("FOMOSNAP_SCREENSHOT_DIR", previousDir);
   if (!saved || !outputError.isEmpty() || files.size() != 1 ||
       QImage(QDir(directory.path()).filePath(files.constFirst())).isNull() ||
       QFile::exists(temporarySnapshotPath())) {
@@ -1066,7 +1072,7 @@ bool runScreenshotFilenameChecks(QString &error) {
   }
   {
     const QString configPath =
-        QDir(directory.path()).filePath(QStringLiteral("omasnap.conf"));
+        QDir(directory.path()).filePath(QStringLiteral("fomosnap.conf"));
     QFile configFile(configPath);
     if (!configFile.open(QIODevice::WriteOnly | QIODevice::Text) ||
         configFile.write("[output]\ndirectory = ~/Captures\n"
@@ -1090,13 +1096,13 @@ bool runScreenshotFilenameChecks(QString &error) {
       return false;
     }
   }
-  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
-  qputenv("OMASNAP_SCREENSHOT_DIR", directory.path().toUtf8());
+  const QByteArray previousDir = qgetenv("FOMOSNAP_SCREENSHOT_DIR");
+  qputenv("FOMOSNAP_SCREENSHOT_DIR", directory.path().toUtf8());
   const auto restoreDir = qScopeGuard([&previousDir] {
     if (previousDir.isEmpty())
-      qunsetenv("OMASNAP_SCREENSHOT_DIR");
+      qunsetenv("FOMOSNAP_SCREENSHOT_DIR");
     else
-      qputenv("OMASNAP_SCREENSHOT_DIR", previousDir);
+      qputenv("FOMOSNAP_SCREENSHOT_DIR", previousDir);
   });
   QImage image(4, 4, QImage::Format_RGB32);
   image.fill(Qt::red);
@@ -1136,10 +1142,10 @@ bool runCrashSnapshotChecks(const CaptureData &capture, QString &error) {
     error = QStringLiteral("Could not create crash-snapshot directory");
     return false;
   }
-  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
-  qputenv("OMASNAP_SCREENSHOT_DIR", directory.path().toUtf8());
+  const QByteArray previousDir = qgetenv("FOMOSNAP_SCREENSHOT_DIR");
+  qputenv("FOMOSNAP_SCREENSHOT_DIR", directory.path().toUtf8());
   const auto restoreDir = qScopeGuard(
-      [&previousDir] { qputenv("OMASNAP_SCREENSHOT_DIR", previousDir); });
+      [&previousDir] { qputenv("FOMOSNAP_SCREENSHOT_DIR", previousDir); });
   const QString snapshotPath = temporarySnapshotPath();
   QFile::remove(snapshotPath);
   const auto settleUntilWritten = [&snapshotPath] {
@@ -1592,12 +1598,17 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
       renderCapture(capture, QRectF(0, 0, 80, 40), {redaction, arrow, label},
                     BackgroundStyle::None);
   const QColor overlayFill = overlayExport.pixelColor(22, 12);
-  const QColor overlayStroke = overlayExport.pixelColor(26, 20);
+  // Sampled to the right of the "X" glyph box: the arrow runs the full width,
+  // but where exactly a glyph lands at 8px depends on the platform's font
+  // rasterisation, and this check is about layer order, not about metrics.
+  const QColor overlayStroke = overlayExport.pixelColor(35, 20);
   if (overlayExport.isNull() || redactionOnly.isNull() ||
       redactionOnly.pixelColor(22, 12) != solid || showsSecretRed(overlayFill) ||
       overlayStroke.blue() <= overlayStroke.red() + 20) {
-    error = QStringLiteral(
-        "Export did not keep redaction under arrow and text");
+    error = QStringLiteral("Export did not keep redaction under arrow and "
+                           "text (fill %1, stroke %2, redaction-only %3)")
+                .arg(overlayFill.name(), overlayStroke.name(),
+                     redactionOnly.pixelColor(22, 12).name());
     return false;
   }
 
@@ -1805,12 +1816,18 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
 
   QTest::keyClick(&editor, Qt::Key_V);
   const QImage beforeMarquee = editor.grab().toImage();
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(120, 120));
-  QTest::mouseMove(&editor, QPoint(560, 260), 20);
+  // Dragged well below the arrows: a press that lands on a layer grabs it
+  // instead of starting a marquee, and exactly where a layer sits in widget
+  // coordinates depends on the chrome height, which is font-metric-driven.
+  constexpr int kMarqueeTop = 380;
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(140, kMarqueeTop));
+  QTest::mouseMove(&editor, QPoint(560, 460), 20);
   application.processEvents();
   const QImage activeMarquee = editor.grab().toImage();
   bool foundBlueMarqueeEdge = false;
-  for (int y = 117; y <= 123 && !foundBlueMarqueeEdge; ++y) {
+  for (int y = kMarqueeTop - 3; y <= kMarqueeTop + 3 && !foundBlueMarqueeEdge;
+       ++y) {
     for (int x = 336; x <= 344; ++x) {
       const QColor pixel = activeMarquee.pixelColor(x, y);
       if (pixel.blue() > 180 && pixel.green() > 80 && pixel.red() < 80) {
@@ -1820,8 +1837,8 @@ bool runContinuousAnnotationToolsSmoke(QApplication &application,
     }
   }
   if (!foundBlueMarqueeEdge ||
-      activeMarquee.pixelColor(340, 130) ==
-          beforeMarquee.pixelColor(340, 130)) {
+      activeMarquee.pixelColor(340, kMarqueeTop + 10) ==
+          beforeMarquee.pixelColor(340, kMarqueeTop + 10)) {
     error = QStringLiteral("Select drag did not paint a visible marquee box");
     return false;
   }
@@ -2127,9 +2144,9 @@ bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
   }
 
   const QByteArray oldPath = qgetenv("PATH");
-  const QByteArray oldCapture = qgetenv("OMASNAP_TEST_CAPTURE");
+  const QByteArray oldCapture = qgetenv("FOMOSNAP_TEST_CAPTURE");
   qputenv("PATH", commands.path().toUtf8() + ':' + oldPath);
-  qputenv("OMASNAP_TEST_CAPTURE", sourcePath.toUtf8());
+  qputenv("FOMOSNAP_TEST_CAPTURE", sourcePath.toUtf8());
 
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -2162,9 +2179,9 @@ bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
     editor.close();
     qputenv("PATH", oldPath);
     if (oldCapture.isEmpty())
-      qunsetenv("OMASNAP_TEST_CAPTURE");
+      qunsetenv("FOMOSNAP_TEST_CAPTURE");
     else
-      qputenv("OMASNAP_TEST_CAPTURE", oldCapture);
+      qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
     return false;
   }
 
@@ -2179,9 +2196,9 @@ bool runAsyncCaptureRegionSmoke(QApplication &application, QString &error) {
   editor.close();
   qputenv("PATH", oldPath);
   if (oldCapture.isEmpty())
-    qunsetenv("OMASNAP_TEST_CAPTURE");
+    qunsetenv("FOMOSNAP_TEST_CAPTURE");
   else
-    qputenv("OMASNAP_TEST_CAPTURE", oldCapture);
+    qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
 
   if (selected.size() != QSize(160, 120)) {
     error = QStringLiteral("Async capture region selection produced %1x%2")
@@ -2469,16 +2486,16 @@ bool runRecentsShelfSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Could not create recents shelf directories");
     return false;
   }
-  const QByteArray previousShelf = qgetenv("OMASNAP_RECENT_DIR");
-  const QByteArray previousDir = qgetenv("OMASNAP_SCREENSHOT_DIR");
-  qputenv("OMASNAP_RECENT_DIR", shelf.path().toUtf8());
-  qputenv("OMASNAP_SCREENSHOT_DIR", screenshots.path().toUtf8());
+  const QByteArray previousShelf = qgetenv("FOMOSNAP_RECENT_DIR");
+  const QByteArray previousDir = qgetenv("FOMOSNAP_SCREENSHOT_DIR");
+  qputenv("FOMOSNAP_RECENT_DIR", shelf.path().toUtf8());
+  qputenv("FOMOSNAP_SCREENSHOT_DIR", screenshots.path().toUtf8());
   const auto restoreEnv = qScopeGuard([&] {
-    qputenv("OMASNAP_RECENT_DIR", previousShelf);
+    qputenv("FOMOSNAP_RECENT_DIR", previousShelf);
     if (previousDir.isEmpty())
-      qunsetenv("OMASNAP_SCREENSHOT_DIR");
+      qunsetenv("FOMOSNAP_SCREENSHOT_DIR");
     else
-      qputenv("OMASNAP_SCREENSHOT_DIR", previousDir);
+      qputenv("FOMOSNAP_SCREENSHOT_DIR", previousDir);
   });
 
   CaptureData capture;
@@ -2668,23 +2685,12 @@ bool runRecentsShelfSmoke(QApplication &application, QString &error) {
   return true;
 }
 
-/** Quotes the same way sendCaptureNotification builds --exec. */
-bool runShellQuoteCheck(QString &error) {
-  if (shellQuote(QStringLiteral("omasnap")) != QStringLiteral("'omasnap'")) {
-    error = QStringLiteral("shellQuote did not wrap a simple token");
-    return false;
-  }
-  if (shellQuote(QStringLiteral("omasnap /tmp/a.png")) !=
-      QStringLiteral("'omasnap /tmp/a.png'")) {
-    error = QStringLiteral("shellQuote did not keep spaces inside quotes");
-    return false;
-  }
-  if (shellQuote(QStringLiteral("it's")) != QStringLiteral("'it'\"'\"'s'")) {
-    error = QStringLiteral("shellQuote did not escape a single quote (%1)")
-                .arg(shellQuote(QStringLiteral("it's")));
-    return false;
-  }
+/** Notification delivery must never be able to fail a capture. Unbundled,
+ *  there is no notification centre at all, so this only asserts that saying so
+ *  is harmless. */
+bool runNotificationCheck(QString &) {
   sendCaptureNotification(QStringLiteral("smoke"));
+  sendCaptureNotification(QStringLiteral("smoke"), QStringLiteral("/nonexistent.png"));
   return true;
 }
 
@@ -3760,7 +3766,7 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Spotlight (Omasnap's own drag-rectangle shape) centers the same way.
+  // Spotlight (FOMOsnap's own drag-rectangle shape) centers the same way.
   QTest::keyClick(&editor, Qt::Key_S);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(600, 400));
   QTest::mouseMove(&editor, QPoint(660, 440), 20);
@@ -5162,9 +5168,12 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
   }
   editor.close();
 
-  // Scrolling Region is a mode of the same surface: drawing a region in it
-  // brings the scroll panel up in place; its tabs leave it; dismissing it
-  // returns to selecting in scroll mode.
+  // Scrolling Region is a mode of the same surface. Capturing one needs
+  // synthetic wheel input, which macOS does not have yet, so drawing a region
+  // in scroll mode reports that and stays armed in scroll mode rather than
+  // silently switching the user to a different capture. Everything downstream
+  // of a stitched image still works, because a stitched image is just an
+  // image handed to the editor.
   {
     CaptureEditor scrollEditor(capture, CaptureEditor::CaptureMode::Scroll);
     scrollEditor.resize(800, 600);
@@ -5180,18 +5189,10 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
     QTest::mouseRelease(&scrollEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(500, 400));
     application.processEvents();
-    if (!scrollEditor.scrollPanelActiveForTest() ||
-        !scrollEditor.selectingForTest()) {
-      error = QStringLiteral("A region in scroll mode did not bring the scroll "
-                             "panel up");
-      return false;
-    }
-    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
-    application.processEvents();
     if (scrollEditor.scrollPanelActiveForTest() ||
-        !scrollEditor.scrollModeForTest() || !scrollEditor.isVisible()) {
-      error = QStringLiteral("Esc on the scroll panel did not return to "
-                             "selecting a scrolling region");
+        !scrollEditor.selectingForTest() || !scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("A region in scroll mode did not stay armed in "
+                             "scroll mode");
       return false;
     }
     // Space walks Region -> Scroll -> Window -> Region.
@@ -5478,13 +5479,13 @@ int main(int argc, char **argv) {
   QTemporaryDir smokeShelf;
   if (!smokeShelf.isValid())
     return 18;
-  qputenv("OMASNAP_RECENT_DIR", smokeShelf.path().toUtf8());
+  qputenv("FOMOSNAP_RECENT_DIR", smokeShelf.path().toUtf8());
 
   // Live output capture against a real compositor (the smoke's own Wayland
   // connection; Qt's platform does not matter): open a session on the named
   // output and grab several frames through the same buffer, timing them,
   // since scroll capture needs many per second.
-  const QString liveOutputName = qEnvironmentVariable("OMASNAP_SMOKE_OUTPUT");
+  const QString liveOutputName = qEnvironmentVariable("FOMOSNAP_SMOKE_OUTPUT");
   if (!liveOutputName.isEmpty()) {
     OutputCapture output;
     QString outputError;
@@ -5515,7 +5516,7 @@ int main(int argc, char **argv) {
     const QString liveRoot =
         argc > 1 ? QString::fromLocal8Bit(argv[1])
                  : QDir(QDir::tempPath())
-                       .filePath(QStringLiteral("omasnap-native-smoke"));
+                       .filePath(QStringLiteral("fomosnap-native-smoke"));
     if (!frame.save(liveRoot + QStringLiteral("-native-output.png"), "PNG"))
       return 105;
     return 0;
@@ -5856,7 +5857,7 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 120;
   }
-  if (!runShellQuoteCheck(snapshotError)) {
+  if (!runNotificationCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 83;
   }
@@ -5867,12 +5868,12 @@ int main(int argc, char **argv) {
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath())
-                     .filePath(QStringLiteral("omasnap-native-smoke"));
+                     .filePath(QStringLiteral("fomosnap-native-smoke"));
   const QString snapshotPath = temporarySnapshotPath();
   QFile::remove(snapshotPath);
   const QString savedRoot = QDir(outputRoot).filePath(QStringLiteral("saved"));
   QDir(savedRoot).removeRecursively();
-  qputenv("OMASNAP_SCREENSHOT_DIR", savedRoot.toUtf8());
+  qputenv("FOMOSNAP_SCREENSHOT_DIR", savedRoot.toUtf8());
 
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -6690,15 +6691,15 @@ int main(int argc, char **argv) {
   if (!recognizeText(ocrImage, ocrError)
            .contains(QStringLiteral("OCR smoke test 42")))
     return 5;
-  const QByteArray savedOmasnapLangs = qgetenv("OMASNAP_OCR_LANGS");
+  const QByteArray savedFOMOsnapLangs = qgetenv("FOMOSNAP_OCR_LANGS");
   const QByteArray savedOmarchyLangs = qgetenv("OMARCHY_OCR_LANGS");
-  qputenv("OMASNAP_OCR_LANGS", "");
+  qputenv("FOMOSNAP_OCR_LANGS", "");
   qputenv("OMARCHY_OCR_LANGS", "eng");
   const QString fallbackOcr = recognizeText(ocrImage, ocrError);
-  if (savedOmasnapLangs.isEmpty())
-    qunsetenv("OMASNAP_OCR_LANGS");
+  if (savedFOMOsnapLangs.isEmpty())
+    qunsetenv("FOMOSNAP_OCR_LANGS");
   else
-    qputenv("OMASNAP_OCR_LANGS", savedOmasnapLangs);
+    qputenv("FOMOSNAP_OCR_LANGS", savedFOMOsnapLangs);
   if (savedOmarchyLangs.isEmpty())
     qunsetenv("OMARCHY_OCR_LANGS");
   else
@@ -6752,7 +6753,7 @@ int main(int argc, char **argv) {
   }
   if (!QFile::exists(savedPath))
     return 70;
-  if (qEnvironmentVariableIsSet("OMASNAP_SMOKE_COPY")) {
+  if (qEnvironmentVariableIsSet("FOMOSNAP_SMOKE_COPY")) {
     QString clipboardError;
     if (!copyPngFileToClipboard(savedPath, clipboardError)) {
       qWarning().noquote() << clipboardError;
@@ -6766,8 +6767,14 @@ int main(int argc, char **argv) {
     return 88;
   }
 
+  QString sessionError;
+  if (!runSessionExitSmoke(sessionError)) {
+    qWarning().noquote() << sessionError;
+    return 74;
+  }
+
   QString transformError;
-  if (!runTransformSmoke(transformError)) {
+  if (!runCaptureProbeSmoke(transformError)) {
     qWarning().noquote() << transformError;
     return 67;
   }

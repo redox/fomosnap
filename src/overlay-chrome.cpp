@@ -60,8 +60,12 @@ QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
   }
   total -= kGap;
   const qreal left = bounds.left() + (bounds.width() - total) / 2.0;
+  // Both axes: `bounds` is the surface minus anything the display keeps for
+  // itself, so on a notched MacBook the strip hangs off the top of the usable
+  // area rather than off the top of the panel, where the camera housing would
+  // cover it.
   for (CaptureTab &tab : tabs)
-    tab.rect.translate(left, 0);
+    tab.rect.translate(left, bounds.top());
   return tabs;
 }
 
@@ -168,8 +172,9 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
   }
   width = std::min(width, bounds.width() - 28.0);
   const qreal height = rows * 19 + 24;
-  const QRectF right(bounds.width() - width - 14, 14, width, height);
-  const QRectF left(14, 14, width, height);
+  const QRectF right(bounds.left() + bounds.width() - width - 14,
+                     bounds.top() + 14, width, height);
+  const QRectF left(bounds.left() + 14, bounds.top() + 14, width, height);
   auto hiddenCount = [&](const QRectF &candidate) {
     int count = 0;
     for (const QPointF &point : keepVisible) {

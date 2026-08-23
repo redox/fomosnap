@@ -1,8 +1,13 @@
 /** @fileoverview Captures, renders, saves, and shares screenshots. */
 #include "capture.hpp"
+#include "mac/mac-platform.hpp"
 #include "output-config.hpp"
 
 #include <QBuffer>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QHash>
+#include <QMimeData>
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -17,8 +22,8 @@
 #include <QPainter>
 #include <QPointF>
 #include <QPainterPath>
-#include <QProcess>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStandardPaths>
 
@@ -102,65 +107,38 @@ QString secureRuntimeDirectory() {
       QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
   if (runtime.isEmpty()) {
     runtime = QDir(QDir::tempPath())
-                  .filePath(QStringLiteral("omasnap-%1").arg(::getuid()));
+                  .filePath(QStringLiteral("fomosnap-%1").arg(::getuid()));
   } else {
-    runtime = QDir(runtime).filePath(QStringLiteral("omasnap"));
+    runtime = QDir(runtime).filePath(QStringLiteral("fomosnap"));
   }
   return ensurePrivateDirectory(runtime) ? QDir::cleanPath(runtime) : QString();
 }
 
 namespace {
-struct ProcessResult {
-  QByteArray output;
-  QByteArray error;
-  int exitCode = -1;
-  bool finished = false;
-};
 
-ProcessResult runProcess(const QString &program, const QStringList &arguments,
-                         const QByteArray &input = {}, int timeoutMs = 10000) {
-  QProcess process;
-  process.setProcessChannelMode(QProcess::SeparateChannels);
-  process.start(program, arguments);
-  if (!process.waitForStarted(2000))
-    return {{}, process.errorString().toUtf8(), -1, false};
-
-  if (!input.isEmpty())
-    process.write(input);
-  process.closeWriteChannel();
-  const bool finished = process.waitForFinished(timeoutMs);
-  if (!finished)
-    process.kill();
-  return {process.readAllStandardOutput(), process.readAllStandardError(),
-          finished ? process.exitCode() : -1, finished};
-}
-
-bool copyToWaylandClipboard(const QString &mimeType, const QByteArray &payload,
-                            QString &error) {
-  QByteArray lastError;
-  for (int attempt = 0; attempt < 2; ++attempt) {
-    const ProcessResult copied =
-        runProcess(QStringLiteral("wl-copy"),
-                   {QStringLiteral("--type"), mimeType}, payload, 5000);
-    if (!copied.finished || copied.exitCode != 0) {
-      lastError = copied.error;
-      continue;
-    }
-
-    const ProcessResult verified = runProcess(
-        QStringLiteral("wl-paste"),
-        {QStringLiteral("--no-newline"), QStringLiteral("--type"), mimeType},
-        {}, 5000);
-    if (verified.finished && verified.exitCode == 0 &&
-        verified.output == payload)
-      return true;
-    lastError = verified.error;
-    if (lastError.isEmpty())
-      lastError = QByteArrayLiteral("clipboard verification did not match");
+/// Copies one flavour to the system pasteboard. NSPasteboard owns the data
+/// once it is set and outlives the process, so unlike wl-copy there is no
+/// daemon to keep alive and nothing to verify by reading back.
+bool copyToClipboard(const QString &mimeType, const QByteArray &payload,
+                     QString &error) {
+  QClipboard *clipboard = QGuiApplication::clipboard();
+  if (!clipboard) {
+    error = QStringLiteral("No clipboard is available");
+    return false;
   }
-  error = QStringLiteral("Could not persist clipboard: %1")
-              .arg(QString::fromUtf8(lastError).trimmed());
-  return false;
+  auto *data = new QMimeData;
+  data->setData(mimeType, payload);
+  if (mimeType.startsWith(QStringLiteral("image/"))) {
+    // Native pasteboard consumers ask for an image flavour, not a byte blob,
+    // so publish both and let each taker pick.
+    const QImage image = QImage::fromData(payload);
+    if (!image.isNull())
+      data->setImageData(image);
+  } else if (mimeType.startsWith(QStringLiteral("text/"))) {
+    data->setText(QString::fromUtf8(payload));
+  }
+  clipboard->setMimeData(data);
+  return true;
 }
 
 QString runtimePath(const QString &name) {
@@ -169,12 +147,12 @@ QString runtimePath(const QString &name) {
 }
 
 QString screenshotTargetPath(QString &error, const QString &appSlug) {
-  // Precedence: OMASNAP_SCREENSHOT_DIR, then [output] directory in the
+  // Precedence: FOMOSNAP_SCREENSHOT_DIR, then [output] directory in the
   // config, then ~/Pictures/Screenshots. The filename pattern comes from
   // [output] filename; its default keeps the date first so the folder always
   // sorts chronologically.
   const OutputConfig config = loadOutputConfig(defaultConfigPath());
-  QString root = qEnvironmentVariable("OMASNAP_SCREENSHOT_DIR");
+  QString root = qEnvironmentVariable("FOMOSNAP_SCREENSHOT_DIR");
   if (root.isEmpty())
     root = config.directory;
   if (root.isEmpty())
@@ -195,84 +173,6 @@ QString screenshotTargetPath(QString &error, const QString &appSlug) {
     path =
         QDir(root).filePath(QStringLiteral("%1-%2.png").arg(stem).arg(suffix));
   return path;
-}
-
-bool parseMonitor(const QByteArray &json, MonitorInfo &monitor,
-                  QString &error) {
-  QJsonParseError parseError;
-  const QJsonDocument document = QJsonDocument::fromJson(json, &parseError);
-  if (parseError.error != QJsonParseError::NoError || !document.isArray()) {
-    error = QStringLiteral("Could not parse Hyprland monitors: %1")
-                .arg(parseError.errorString());
-    return false;
-  }
-
-  for (const QJsonValue value : document.array()) {
-    const QJsonObject object = value.toObject();
-    if (!object.value(QStringLiteral("focused")).toBool())
-      continue;
-
-    const qreal scale = object.value(QStringLiteral("scale")).toDouble(1.0);
-    const int rawWidth = object.value(QStringLiteral("width")).toInt();
-    const int rawHeight = object.value(QStringLiteral("height")).toInt();
-    const int transform = object.value(QStringLiteral("transform")).toInt();
-    int logicalWidth = qRound(rawWidth / std::max<qreal>(scale, 0.01));
-    int logicalHeight = qRound(rawHeight / std::max<qreal>(scale, 0.01));
-    if (transform == 1 || transform == 3 || transform == 5 || transform == 7)
-      std::swap(logicalWidth, logicalHeight);
-
-    monitor.name = object.value(QStringLiteral("name")).toString();
-    monitor.geometry = {object.value(QStringLiteral("x")).toInt(),
-                        object.value(QStringLiteral("y")).toInt(), logicalWidth,
-                        logicalHeight};
-    monitor.pixelSize = {rawWidth, rawHeight};
-    monitor.scale = scale;
-    monitor.workspaceId = object.value(QStringLiteral("activeWorkspace"))
-                              .toObject()
-                              .value(QStringLiteral("id"))
-                              .toInt();
-    return !monitor.name.isEmpty() && logicalWidth > 0 && logicalHeight > 0;
-  }
-
-  error = QStringLiteral("Hyprland did not report a focused monitor");
-  return false;
-}
-
-QVector<WindowTarget> parseWindows(const QByteArray &json,
-                                   const MonitorInfo &monitor) {
-  QVector<WindowTarget> result;
-  const QJsonDocument document = QJsonDocument::fromJson(json);
-  if (!document.isArray())
-    return result;
-
-  for (const QJsonValue value : document.array()) {
-    const QJsonObject object = value.toObject();
-    if (object.value(QStringLiteral("workspace"))
-            .toObject()
-            .value(QStringLiteral("id"))
-            .toInt() != monitor.workspaceId)
-      continue;
-
-    const QJsonArray at = object.value(QStringLiteral("at")).toArray();
-    const QJsonArray size = object.value(QStringLiteral("size")).toArray();
-    if (at.size() < 2 || size.size() < 2)
-      continue;
-
-    QRect rect(at.at(0).toInt() - monitor.geometry.x(),
-               at.at(1).toInt() - monitor.geometry.y(), size.at(0).toInt(),
-               size.at(1).toInt());
-    rect = rect.intersected(QRect(QPoint(), monitor.geometry.size()));
-    if (rect.isEmpty())
-      continue;
-
-    QString appClass = object.value(QStringLiteral("class")).toString();
-    QString title = object.value(QStringLiteral("title")).toString();
-    if (title.isEmpty())
-      title = appClass.isEmpty() ? QStringLiteral("window") : appClass;
-    result.push_back({rect, object.value(QStringLiteral("stableId")).toString(),
-                      std::move(title), std::move(appClass)});
-  }
-  return result;
 }
 
 void drawAnnotation(QPainter &painter, const Annotation &annotation) {
@@ -743,16 +643,31 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
 }
 
 bool probeFocusedMonitor(MonitorInfo &monitor, QString &error) {
-  const ProcessResult monitors =
-      runProcess(QStringLiteral("hyprctl"),
-                 {QStringLiteral("monitors"), QStringLiteral("-j")});
-  if (!monitors.finished || monitors.exitCode != 0 ||
-      !parseMonitor(monitors.output, monitor, error)) {
-    if (error.isEmpty())
-      error = QString::fromUtf8(monitors.error).trimmed();
-    return false;
+  // The headless smoke suite has no display and no Screen Recording grant, so
+  // it describes a monitor instead of discovering one. Format:
+  // `name:x,y,width,height@scale`.
+  const QString described = qEnvironmentVariable("FOMOSNAP_TEST_MONITOR");
+  if (!described.isEmpty()) {
+    static const QRegularExpression pattern(
+        QStringLiteral("^([^:]+):(-?\\d+),(-?\\d+),(\\d+),(\\d+)"
+                       "(?:@([0-9.]+))?$"));
+    const QRegularExpressionMatch match = pattern.match(described);
+    if (!match.hasMatch()) {
+      error = QStringLiteral("Malformed FOMOSNAP_TEST_MONITOR: %1").arg(described);
+      return false;
+    }
+    monitor = {};
+    monitor.name = match.captured(1);
+    monitor.geometry = {match.captured(2).toInt(), match.captured(3).toInt(),
+                        match.captured(4).toInt(), match.captured(5).toInt()};
+    monitor.scale =
+        match.captured(6).isEmpty() ? 1.0 : match.captured(6).toDouble();
+    monitor.pixelSize =
+        QSize(qRound(monitor.geometry.width() * monitor.scale),
+              qRound(monitor.geometry.height() * monitor.scale));
+    return true;
   }
-  return true;
+  return mac::focusedDisplay(monitor, error);
 }
 
 bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
@@ -764,17 +679,7 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
     return false;
   }
 
-  // Window discovery is independent of the screen grab, so let the hyprctl
-  // round trip overlap the in-process output capture.
-  QProcess clients;
-  if (includeWindows) {
-    clients.setProcessChannelMode(QProcess::SeparateChannels);
-    clients.start(QStringLiteral("hyprctl"),
-                  {QStringLiteral("clients"), QStringLiteral("-j")});
-    clients.closeWriteChannel();
-  }
-
-  const QString testCapture = qEnvironmentVariable("OMASNAP_TEST_CAPTURE");
+  const QString testCapture = qEnvironmentVariable("FOMOSNAP_TEST_CAPTURE");
   if (!testCapture.isEmpty()) {
     if (!capture.source.load(testCapture)) {
       error = QStringLiteral("Screen capture failed: could not load test "
@@ -790,13 +695,8 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
 
   capture.previewSize = geometry.size();
 
-  if (includeWindows) {
-    if (!clients.waitForFinished(10000))
-      clients.kill();
-    else if (clients.exitCode() == 0)
-      capture.windows =
-          parseWindows(clients.readAllStandardOutput(), capture.monitor);
-  }
+  if (includeWindows)
+    capture.windows = mac::windowTargets(capture.monitor);
   return true;
 }
 
@@ -926,68 +826,46 @@ bool loadClipboardImage(QImage &image, QString &error) {
   image = {};
   error.clear();
 
-  const ProcessResult listed =
-      runProcess(QStringLiteral("wl-paste"), {QStringLiteral("--list-types")},
-                 {}, 5000);
-  if (!listed.finished || listed.exitCode != 0) {
-    const QString detail = QString::fromUtf8(listed.error).trimmed();
-    error = detail.isEmpty()
-                ? QStringLiteral("Could not read the Wayland clipboard")
-                : QStringLiteral("Could not read the Wayland clipboard: %1")
-                      .arg(detail);
+  QClipboard *clipboard = QGuiApplication::clipboard();
+  const QMimeData *data = clipboard ? clipboard->mimeData() : nullptr;
+  if (!data) {
+    error = QStringLiteral("Could not read the clipboard");
     return false;
   }
 
-  const QStringList offered =
-      QString::fromUtf8(listed.output)
-          .split('\n', Qt::SkipEmptyParts, Qt::CaseSensitive);
-  QStringList imageTypes;
-  const QStringList preferred{QStringLiteral("image/png"),
-                              QStringLiteral("image/jpeg"),
-                              QStringLiteral("image/webp"),
-                              QStringLiteral("image/bmp")};
+  // Prefer the encoded flavours: they carry the original pixels, while the
+  // pasteboard's own image conversion may have been through a colour-space
+  // round trip.
+  const QStringList preferred{
+      QStringLiteral("image/png"), QStringLiteral("image/tiff"),
+      QStringLiteral("image/jpeg"), QStringLiteral("image/webp"),
+      QStringLiteral("image/bmp")};
+  QStringList candidates;
   for (const QString &mimeType : preferred) {
-    if (offered.contains(mimeType))
-      imageTypes.append(mimeType);
+    if (data->hasFormat(mimeType))
+      candidates.append(mimeType);
   }
-  for (const QString &mimeType : offered) {
-    const QString trimmed = mimeType.trimmed();
-    if (trimmed.startsWith(QStringLiteral("image/")) &&
-        !imageTypes.contains(trimmed))
-      imageTypes.append(trimmed);
-  }
-  if (imageTypes.isEmpty()) {
-    error = QStringLiteral("Clipboard does not contain an image");
-    return false;
+  for (const QString &mimeType : data->formats()) {
+    if (mimeType.startsWith(QStringLiteral("image/")) &&
+        !candidates.contains(mimeType))
+      candidates.append(mimeType);
   }
 
-  bool receivedImageData = false;
-  QString readError;
-  for (const QString &mimeType : imageTypes) {
-    const ProcessResult pasted = runProcess(
-        QStringLiteral("wl-paste"),
-        {QStringLiteral("--no-newline"), QStringLiteral("--type"), mimeType},
-        {}, 5000);
-    if (!pasted.finished || pasted.exitCode != 0) {
-      const QString detail = QString::fromUtf8(pasted.error).trimmed();
-      if (!detail.isEmpty())
-        readError = detail;
-      continue;
-    }
-    receivedImageData = true;
-    image = QImage::fromData(pasted.output);
+  for (const QString &mimeType : candidates) {
+    image = QImage::fromData(data->data(mimeType));
     if (!image.isNull())
       return true;
   }
 
-  if (!receivedImageData) {
-    error = readError.isEmpty()
-                ? QStringLiteral("Could not read clipboard image")
-                : QStringLiteral("Could not read clipboard image: %1")
-                      .arg(readError);
-    return false;
+  if (data->hasImage()) {
+    image = qvariant_cast<QImage>(data->imageData());
+    if (!image.isNull())
+      return true;
   }
-  error = QStringLiteral("Clipboard image could not be decoded");
+
+  error = candidates.isEmpty() && !data->hasImage()
+              ? QStringLiteral("Clipboard does not contain an image")
+              : QStringLiteral("Clipboard image could not be decoded");
   return false;
 }
 
@@ -1002,7 +880,7 @@ bool copyPngFileToClipboard(const QString &path, QString &error) {
     error = QStringLiteral("Screenshot snapshot is empty: %1").arg(path);
     return false;
   }
-  return copyToWaylandClipboard(QStringLiteral("image/png"), png, error);
+  return copyToClipboard(QStringLiteral("image/png"), png, error);
 }
 
 bool copyImageToClipboard(const QImage &image, QString &error) {
@@ -1012,7 +890,7 @@ bool copyImageToClipboard(const QImage &image, QString &error) {
     error = QStringLiteral("Could not encode screenshot as PNG");
     return false;
   }
-  return copyToWaylandClipboard(QStringLiteral("image/png"), png, error);
+  return copyToClipboard(QStringLiteral("image/png"), png, error);
 }
 
 bool quickOutput(const QImage &image, QuickOutputMode mode, QString &error) {
@@ -1601,67 +1479,49 @@ bool copyTextToClipboard(const QString &text, QString &error) {
     error = QStringLiteral("No text found in selection");
     return false;
   }
-  return copyToWaylandClipboard(QStringLiteral("text/plain;charset=utf-8"),
-                                text.toUtf8(), error);
+  return copyToClipboard(QStringLiteral("text/plain;charset=utf-8"),
+                         text.toUtf8(), error);
+}
+
+/// Maps the tesseract language codes the Omarchy-era configuration used onto
+/// the BCP-47 tags Vision wants. Anything already looking like a tag (or any
+/// code with no mapping) is passed straight through.
+[[nodiscard]] static QStringList visionLanguages(const QString &codes) {
+  static const QHash<QString, QString> tags = {
+      {QStringLiteral("eng"), QStringLiteral("en-US")},
+      {QStringLiteral("fra"), QStringLiteral("fr-FR")},
+      {QStringLiteral("deu"), QStringLiteral("de-DE")},
+      {QStringLiteral("spa"), QStringLiteral("es-ES")},
+      {QStringLiteral("ita"), QStringLiteral("it-IT")},
+      {QStringLiteral("por"), QStringLiteral("pt-BR")},
+      {QStringLiteral("nld"), QStringLiteral("nl-NL")},
+      {QStringLiteral("rus"), QStringLiteral("ru-RU")},
+      {QStringLiteral("ukr"), QStringLiteral("uk-UA")},
+      {QStringLiteral("jpn"), QStringLiteral("ja-JP")},
+      {QStringLiteral("kor"), QStringLiteral("ko-KR")},
+      {QStringLiteral("chi_sim"), QStringLiteral("zh-Hans")},
+      {QStringLiteral("chi_tra"), QStringLiteral("zh-Hant")},
+  };
+
+  QStringList result;
+  for (const QString &raw : codes.split(QLatin1Char('+'), Qt::SkipEmptyParts)) {
+    const QString code = raw.trimmed();
+    if (code.isEmpty())
+      continue;
+    result.append(tags.value(code.toLower(), code));
+  }
+  return result;
 }
 
 QString recognizeText(const QImage &image, QString &error) {
-  QByteArray payload;
-  QBuffer buffer(&payload);
-  if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG")) {
-    error = QStringLiteral("Could not prepare image for OCR");
-    return {};
-  }
-
-  QString languages = qEnvironmentVariable("OMASNAP_OCR_LANGS");
+  QString languages = qEnvironmentVariable("FOMOSNAP_OCR_LANGS");
   if (languages.isEmpty())
-    languages =
-        qEnvironmentVariable("OMARCHY_OCR_LANGS", QStringLiteral("eng"));
-  languages = languages.trimmed();
-  const ProcessResult result = runProcess(
-      QStringLiteral("tesseract"),
-      {QStringLiteral("stdin"), QStringLiteral("stdout"),
-       QStringLiteral("--oem"), QStringLiteral("1"),
-       QStringLiteral("--psm"), QStringLiteral("6"),
-       QStringLiteral("-l"), languages,
-       QStringLiteral("--dpi"), QStringLiteral("300"),
-       QStringLiteral("-c"), QStringLiteral("preserve_interword_spaces=1")},
-      payload, 30000);
-  if (!result.finished || result.exitCode != 0) {
-    error = QStringLiteral("OCR failed for languages %1: %2")
-                .arg(languages, QString::fromUtf8(result.error).trimmed());
-    return {};
-  }
-  const QString text = QString::fromUtf8(result.output).trimmed();
-  if (text.isEmpty())
-    error = QStringLiteral("No text found in selection");
-  return text;
-}
-
-QString shellQuote(QString value) {
-  value.replace('\'', QStringLiteral("'\"'\"'"));
-  return QStringLiteral("'%1'").arg(value);
+    languages = QStringLiteral("eng");
+  return mac::recognizeTextWithVision(image, visionLanguages(languages), error);
 }
 
 void sendCaptureNotification(const QString &message, const QString &imagePath) {
-  QStringList arguments{QStringLiteral("-g"), QStringLiteral(""),
-                        QStringLiteral("--app-name"), QStringLiteral("omasnap"),
-                        message};
-  if (!imagePath.isEmpty()) {
-    const QString imageUrl =
-        QUrl::fromLocalFile(imagePath).toString(QUrl::FullyEncoded);
-    QString omasnap = QDir(QCoreApplication::applicationDirPath())
-                          .filePath(QStringLiteral("omasnap"));
-    if (!QFileInfo::exists(omasnap))
-      omasnap = QStringLiteral("omasnap");
-    arguments << QStringLiteral("Click to edit") << QStringLiteral("--image")
-              << imagePath << QStringLiteral("--exec")
-              << QStringLiteral("%1 %2").arg(shellQuote(omasnap),
-                                             shellQuote(imageUrl));
-  }
-  arguments << QStringLiteral("-t") << QStringLiteral("4500");
-  QProcess::startDetached(QStringLiteral("omarchy-notification-send"),
-                          arguments);
+  mac::postNotification(message, imagePath);
 }
 
 /// Presents a loaded image as the thing being edited. A log written by the

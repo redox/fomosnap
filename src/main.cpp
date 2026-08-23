@@ -2,17 +2,17 @@
 #include "cli-path.hpp"
 #include "editor.hpp"
 #include "instance-lock.hpp"
+#include "mac/mac-platform.hpp"
+#include "mac/mac-window.hpp"
 #include "pin.hpp"
 #include "recent-snaps.hpp"
-
-#include <LayerShellQt/Window>
-
 
 #include <QImageReader>
 #include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QEvent>
 #include <QFile>
 #include <QGuiApplication>
 #include <QLockFile>
@@ -22,18 +22,31 @@
 #include <QWindow>
 
 #include <csignal>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <cerrno>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
 namespace {
+/// SIGTERM is how a second FOMOsnap asks a running one to give up its overlay.
+/// A one-shot process answers by quitting; the resident agent answers by
+/// closing the current session and staying alive for the next hotkey.
 class PosixSignalNotifier final : public QObject {
 public:
+  using Action = std::function<void()>;
+
   explicit PosixSignalNotifier(QObject *parent = nullptr) : QObject(parent) {
-    if (::socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0,
-                     fds_) != 0)
+    // macOS has no SOCK_NONBLOCK/SOCK_CLOEXEC socketpair flags, so both ends
+    // are set up afterwards.
+    if (::socketpair(AF_UNIX, SOCK_DGRAM, 0, fds_) != 0)
       return; // Default signal disposition stays in effect.
+    for (const int fd : fds_) {
+      ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+      ::fcntl(fd, F_SETFD, ::fcntl(fd, F_GETFD, 0) | FD_CLOEXEC);
+    }
     signalFd_ = fds_[0];
 
     struct sigaction sa{};
@@ -60,9 +73,15 @@ public:
       char bytes[32];
       while (::read(fds_[1], bytes, sizeof(bytes)) > 0) {
       }
-      QCoreApplication::quit();
+      if (action_)
+        action_();
+      else
+        QCoreApplication::quit();
+      notifier_->setEnabled(true);
     });
   }
+
+  void setAction(Action action) { action_ = std::move(action); }
 
   ~PosixSignalNotifier() override {
     if (sigintInstalled_)
@@ -90,16 +109,270 @@ private:
   bool sigintInstalled_ = false;
   bool sigtermInstalled_ = false;
   QSocketNotifier *notifier_ = nullptr;
+  Action action_;
 };
+
+/// Everything one capture invocation needs, parsed once so the resident agent
+/// can replay it on every hotkey press.
+struct SessionOptions {
+  CaptureEditor::CaptureMode captureMode = CaptureEditor::CaptureMode::Region;
+  QuickOutputMode quickOutputMode = QuickOutputMode::None;
+  bool editingImage = false;
+  bool clipboardInput = false;
+  QString filePath;
+};
+
+/// Notices when an overlay closes itself. Only the agent needs this: a
+/// one-shot process ends with its last window, but the agent keeps running,
+/// and nothing else would tell it the session is over so the next hotkey
+/// press opens a new overlay rather than toggling a dead one.
+///
+/// Parented to the editor it watches, so it can never outlive it and is never
+/// deleted from inside its own callback.
+class CloseWatcher final : public QObject {
+public:
+  CloseWatcher(QObject *parent, std::function<void()> onClose)
+      : QObject(parent), onClose_(std::move(onClose)) {}
+
+protected:
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (event->type() == QEvent::Close || event->type() == QEvent::Hide) {
+      // Queued: the editor is still delivering this event to itself, and the
+      // callback tears the editor down.
+      QMetaObject::invokeMethod(
+          this,
+          [this] {
+            if (onClose_)
+              onClose_();
+          },
+          Qt::QueuedConnection);
+    }
+    return QObject::eventFilter(watched, event);
+  }
+
+private:
+  std::function<void()> onClose_;
+};
+
+/// One capture overlay and the single-instance lock it holds while up. The
+/// lock is per session, not per process: an idle agent holds nothing, so a
+/// command-line FOMOsnap can still take the screen.
+class CaptureSession {
+public:
+  [[nodiscard]] bool active() const { return editor_ != nullptr; }
+
+  void stop() {
+    // Reentrant by construction: stop() runs from the editor's own close
+    // notification, and tearing the editor down sends more of them.
+    if (stopping_)
+      return;
+    stopping_ = true;
+    if (CaptureEditor *editor = editor_.release()) {
+      // deleteLater, never delete: the call stack above us belongs to this
+      // editor and to the event filter parented to it.
+      editor->hide();
+      editor->deleteLater();
+    }
+    lock_.reset();
+    stopping_ = false;
+  }
+
+  /// Opens the overlay. Returns the process exit code; `shown` distinguishes
+  /// "a window is up, run the event loop" from "the work is already done".
+  /// `watchForClose` is for the agent, which must notice a session ending.
+  [[nodiscard]] int start(const SessionOptions &options, bool watchForClose,
+                          bool &shown);
+
+private:
+  std::unique_ptr<QLockFile> lock_;
+  std::unique_ptr<CaptureEditor> editor_;
+  bool stopping_ = false;
+};
+
+/// The agent's session. A file-scope object because the hotkey handler is a
+/// plain function pointer with nowhere to carry context.
+CaptureSession g_session;
+SessionOptions g_hotkeyOptions;
+
+void onHotkey() {
+  // The hotkey toggles, matching what the Hyprland binding did: press once to
+  // open the overlay, again to dismiss it.
+  if (g_session.active()) {
+    g_session.stop();
+    return;
+  }
+  bool shown = false;
+  static_cast<void>(
+      g_session.start(g_hotkeyOptions, /*watchForClose=*/true, shown));
+}
+
+int CaptureSession::start(const SessionOptions &options, bool watchForClose,
+                          bool &shown) {
+  shown = false;
+  stop();
+
+  const QString runtime = secureRuntimeDirectory();
+  if (runtime.isEmpty()) {
+    qCritical() << "Could not create private runtime directory";
+    return 1;
+  }
+  auto lock = std::make_unique<QLockFile>(
+      QDir(runtime).filePath(QStringLiteral("fomosnap.instance")));
+  // Every capture, quick output included, dismisses a running overlay instead
+  // of starting a second one: a late capture would otherwise photograph that
+  // overlay. Editing an image always takes over so the editor can open.
+  const InstanceLockResult lockResult =
+      acquireInstanceLock(*lock, options.editingImage ? InstanceMode::EditFile
+                                                      : InstanceMode::Capture);
+  if (lockResult.signalledPid != 0)
+    qInfo().noquote()
+        << QStringLiteral("Asked the running fomosnap (pid %1) to quit")
+               .arg(lockResult.signalledPid);
+  if (!lockResult.proceed) {
+    if (!lockResult.error.isEmpty())
+      qCritical().noquote() << lockResult.error;
+    return lockResult.exitCode;
+  }
+
+  CaptureData capture;
+  OperationLog restoredLog;
+  QString error;
+  CaptureEditor::CaptureMode captureMode = options.captureMode;
+  if (options.editingImage) {
+    QImage image;
+    QString inputName;
+    if (options.clipboardInput) {
+      if (!loadClipboardImage(image, error)) {
+        const QString message =
+            QStringLiteral("Could not load clipboard image: %1").arg(error);
+        qCritical().noquote() << message;
+        sendCaptureNotification(message);
+        return 1;
+      }
+      inputName = QStringLiteral("clipboard image");
+    } else {
+      QString localFile = QUrl(options.filePath).toLocalFile();
+      if (localFile.isEmpty())
+        localFile = options.filePath;
+      image.load(localFile);
+      if (image.isNull()) {
+        qCritical().noquote()
+            << QStringLiteral("Could not load image: %1").arg(options.filePath);
+        return 1;
+      }
+      inputName = localFile;
+      const QString sidecar = operationLogPath(localFile);
+      if (QFile::exists(sidecar) &&
+          !loadOperationLog(sidecar, restoredLog, error)) {
+        qCritical().noquote()
+            << QStringLiteral("Could not restore operation log: %1").arg(error);
+        return 1;
+      }
+    }
+    describeFileCapture(capture, image, restoredLog);
+    captureMode = CaptureEditor::CaptureMode::File;
+    qInfo().noquote() << QStringLiteral("Opened %1 for annotation (%2x%3)")
+                             .arg(inputName)
+                             .arg(image.width())
+                             .arg(image.height());
+  } else if (!probeFocusedMonitor(capture.monitor, error)) {
+    qCritical().noquote() << error;
+    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
+    return 1;
+  }
+
+  // Grab the display before the overlay window exists. Nothing about
+  // ScreenCaptureKit would stop us photographing our own window, so the
+  // ordering is what keeps the overlay out of its own screenshot.
+  const bool instantFullscreenOutput =
+      !options.editingImage &&
+      captureMode == CaptureEditor::CaptureMode::Fullscreen &&
+      options.quickOutputMode != QuickOutputMode::None;
+  if (!options.editingImage &&
+      !captureMonitorPixels(capture.monitor, capture, !instantFullscreenOutput,
+                            error)) {
+    qCritical().noquote() << error;
+    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
+    return 1;
+  }
+
+  if (instantFullscreenOutput) {
+    QString outputError;
+    const QSize expectedSize(
+        qRound(capture.previewSize.width() * capture.monitor.scale),
+        qRound(capture.previewSize.height() * capture.monitor.scale));
+    const QImage output =
+        capture.monitor.scale <= 1.0 || capture.source.size() == expectedSize
+            ? capture.source
+            : renderCapture(capture, QRectF(QPointF(), capture.previewSize), {},
+                            BackgroundStyle::None);
+    if (!quickOutput(output, options.quickOutputMode, outputError)) {
+      qCritical().noquote() << outputError;
+      return 1;
+    }
+    return 0;
+  }
+
+  // Displays are matched by geometry rather than by name: Qt and macOS agree
+  // on the layout in points, but not on what to call a screen.
+  QScreen *targetScreen = QGuiApplication::primaryScreen();
+  for (QScreen *screen : QGuiApplication::screens()) {
+    if (screen->geometry() == capture.monitor.geometry ||
+        screen->name() == capture.monitor.name) {
+      targetScreen = screen;
+      break;
+    }
+  }
+
+  if (!options.editingImage) {
+    qInfo().noquote()
+        << QStringLiteral("Captured %1 with %2 selectable windows")
+               .arg(capture.monitor.name)
+               .arg(capture.windows.size());
+  }
+
+  auto editor = std::make_unique<CaptureEditor>(
+      std::move(capture), captureMode, options.quickOutputMode, restoredLog);
+  // Frameless and translucent before the native window is realised: the edit
+  // phase draws a scrim over the live desktop, and a title bar or a drop
+  // shadow on a full-screen overlay reads as a rendering bug.
+  editor->setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
+                         Qt::NoDropShadowWindowHint);
+  editor->setAttribute(Qt::WA_TranslucentBackground);
+  editor->setScreen(targetScreen);
+  editor->setGeometry(targetScreen->geometry());
+  editor->winId();
+  QWindow *window = editor->windowHandle();
+  if (!window) {
+    qCritical() << "Could not create the capture overlay window";
+    return 1;
+  }
+  macwindow::configure(window, macwindow::Level::Shielding,
+                       macwindow::Keyboard::Exclusive,
+                       /*joinsAllSpaces=*/true, /*transparent=*/true);
+  editor->setSafeAreaTop(macwindow::safeAreaTopInset(window));
+  editor->show();
+  macwindow::activate(window);
+  editor->setFocus(Qt::ActiveWindowFocusReason);
+
+  if (watchForClose) {
+    auto *watcher = new CloseWatcher(editor.get(), [this] { stop(); });
+    editor->installEventFilter(watcher);
+  }
+
+  lock_ = std::move(lock);
+  editor_ = std::move(editor);
+  shown = true;
+  return 0;
+}
 } // namespace
 
 int main(int argc, char **argv) {
-  QCoreApplication::setApplicationName(QStringLiteral("omasnap"));
-  QCoreApplication::setApplicationVersion(QString::fromLatin1(OMASNAP_VERSION));
-  QCoreApplication::setOrganizationName(QStringLiteral("Omarchy"));
-  qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
-  QGuiApplication::setDesktopFileName(QStringLiteral("omasnap"));
+  QCoreApplication::setApplicationName(QStringLiteral("fomosnap"));
+  QCoreApplication::setApplicationVersion(QString::fromLatin1(FOMOSNAP_VERSION));
+  QCoreApplication::setOrganizationName(QStringLiteral("FOMOsnap"));
   QApplication application(argc, argv);
+  mac::installNotificationHandler();
 
   // A stitched scroll capture (or any tall pinned image) exceeds Qt's default
   // 256 MB image-decode allocation limit; lift it so --file/--pin can open it.
@@ -108,10 +381,9 @@ int main(int argc, char **argv) {
 
   QCommandLineParser parser;
   parser.setApplicationDescription(QStringLiteral(
-      "Native Wayland screenshot and annotation overlay for Hyprland and "
-      "Omarchy.\n"
+      "Native macOS screenshot and annotation overlay.\n"
       "\n"
-      "Only one capture overlay runs at a time. Starting omasnap again while "
+      "Only one capture overlay runs at a time. Starting fomosnap again while "
       "an\noverlay is open dismisses it: the running instance is asked to "
       "quit and the\nnew process exits without capturing, so the same hotkey "
       "opens and closes the\noverlay. Quick output (--copy, --save) dismisses "
@@ -162,14 +434,48 @@ int main(int argc, char **argv) {
   const QCommandLineOption scrollOption(
       QStringLiteral("scroll"),
       QStringLiteral("Capture a scrolling region and stitch it into one tall "
-                     "image, then open it in the editor."));
+                     "image, then open it in the editor. Not yet implemented "
+                     "on macOS."));
   parser.addOption(scrollOption);
+  const QCommandLineOption agentOption(
+      QStringLiteral("agent"),
+      QStringLiteral("Stay resident with no Dock icon and open the overlay on "
+                     "a system-wide hotkey. Qt is already warm, so the "
+                     "overlay appears with no launch cost."));
+  parser.addOption(agentOption);
+  const QCommandLineOption hotkeyOption(
+      QStringLiteral("hotkey"),
+      QStringLiteral("Hotkey for --agent, e.g. \"ctrl+cmd+4\" (default) or "
+                     "\"cmd+shift+2\"."),
+      QStringLiteral("keys"));
+  parser.addOption(hotkeyOption);
+  const QCommandLineOption installAgentOption(
+      QStringLiteral("install-agent"),
+      QStringLiteral("Start the agent at login, then exit."));
+  parser.addOption(installAgentOption);
+  const QCommandLineOption uninstallAgentOption(
+      QStringLiteral("uninstall-agent"),
+      QStringLiteral("Stop starting the agent at login, then exit."));
+  parser.addOption(uninstallAgentOption);
   parser.addPositionalArgument(
       QStringLiteral("target"),
       QStringLiteral("Capture mode (smart, region, windows, fullscreen) or the "
                      "path of an image file to edit."),
       QStringLiteral("[target]"));
   parser.process(application);
+
+  if (parser.isSet(installAgentOption) || parser.isSet(uninstallAgentOption)) {
+    const bool enable = parser.isSet(installAgentOption);
+    QString error;
+    if (!mac::setLaunchAtLogin(enable, error)) {
+      qCritical().noquote() << error;
+      return 1;
+    }
+    qInfo().noquote() << (enable ? QStringLiteral("FOMOsnap will start at login")
+                                 : QStringLiteral("FOMOsnap will no longer "
+                                                  "start at login"));
+    return 0;
+  }
 
   QString filePath = parser.value(fileOption);
   const bool clipboardInput = parser.isSet(clipboardOption);
@@ -204,6 +510,8 @@ int main(int argc, char **argv) {
     QString pinPath = QUrl(parser.value(pinOption)).toLocalFile();
     if (pinPath.isEmpty())
       pinPath = parser.value(pinOption);
+    if (!loadCaptureFonts())
+      return 1;
     return runPinnedCapture(pinPath);
   }
   if (positional.size() > 1) {
@@ -252,154 +560,83 @@ int main(int argc, char **argv) {
         << "Quick output options cannot be combined with an image input";
     return 2;
   }
+  const bool agentMode = parser.isSet(agentOption);
+  if (agentMode && (editingImage || quickOutputMode != QuickOutputMode::None)) {
+    qCritical() << "Agent mode cannot be combined with an image input or "
+                   "quick output";
+    return 2;
+  }
   if (!loadCaptureFonts())
     return 1;
-  application.setQuitOnLastWindowClosed(true);
 
-  const QString runtime = secureRuntimeDirectory();
-  if (runtime.isEmpty()) {
-    qCritical() << "Could not create private runtime directory";
-    return 1;
-  }
-  QLockFile instanceLock(
-      QDir(runtime).filePath(QStringLiteral("omasnap.instance")));
-  // Every capture, quick output included, dismisses a running overlay instead
-  // of starting a second one: a late capture would otherwise photograph that overlay.
-  // Editing an image always takes over so the requested editor can open.
-  const InstanceLockResult lockResult = acquireInstanceLock(
-      instanceLock, editingImage ? InstanceMode::EditFile
-                                 : InstanceMode::Capture);
-  if (lockResult.signalledPid != 0)
-    qInfo().noquote() << QStringLiteral("Asked the running omasnap (pid %1) to "
-                                        "quit")
-                             .arg(lockResult.signalledPid);
-  if (!lockResult.proceed) {
-    if (!lockResult.error.isEmpty())
-      qCritical().noquote() << lockResult.error;
-    return lockResult.exitCode;
-  }
-
-  CaptureData capture;
-  OperationLog restoredLog;
-  QString error;
-  if (editingImage) {
-    QImage image;
-    QString inputName;
-    if (clipboardInput) {
-      if (!loadClipboardImage(image, error)) {
-        const QString message =
-            QStringLiteral("Could not load clipboard image: %1").arg(error);
-        qCritical().noquote() << message;
-        sendCaptureNotification(message);
-        return 1;
-      }
-      inputName = QStringLiteral("clipboard image");
-    } else {
-      QString localFile = QUrl(filePath).toLocalFile();
-      if (localFile.isEmpty())
-        localFile = filePath;
-      image.load(localFile);
-      if (image.isNull()) {
-        qCritical().noquote()
-            << QStringLiteral("Could not load image: %1").arg(filePath);
-        return 1;
-      }
-      inputName = localFile;
-      const QString sidecar = operationLogPath(localFile);
-      if (QFile::exists(sidecar) &&
-          !loadOperationLog(sidecar, restoredLog, error)) {
-        qCritical().noquote()
-            << QStringLiteral("Could not restore operation log: %1").arg(error);
-        return 1;
-      }
-    }
-    describeFileCapture(capture, image, restoredLog);
-    captureMode = CaptureEditor::CaptureMode::File;
-    qInfo().noquote() << QStringLiteral("Opened %1 for annotation (%2x%3)")
-                             .arg(inputName)
-                             .arg(image.width())
-                             .arg(image.height());
-  } else if (!probeFocusedMonitor(capture.monitor, error)) {
-    qCritical().noquote() << error;
-    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
-    return 1;
-  }
-
-  // Grab the output before the layer exists. ext-image-copy-capture waits for
-  // a composited frame, so mapping the dim overlay first photographs the veil.
-  const bool instantFullscreenOutput =
-      !editingImage && captureMode == CaptureEditor::CaptureMode::Fullscreen &&
-      quickOutputMode != QuickOutputMode::None;
-  if (!editingImage &&
-      !captureMonitorPixels(capture.monitor, capture,
-                            !instantFullscreenOutput, error)) {
-    qCritical().noquote() << error;
-    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
-    return 1;
-  }
-
-  if (instantFullscreenOutput) {
-    QString outputError;
-    const QSize expectedSize(
-        qRound(capture.previewSize.width() * capture.monitor.scale),
-        qRound(capture.previewSize.height() * capture.monitor.scale));
-    const QImage output = capture.monitor.scale <= 1.0 ||
-                                  capture.source.size() == expectedSize
-                              ? capture.source
-                              : renderCapture(capture,
-                                              QRectF(QPointF(), capture.previewSize), {},
-                                              BackgroundStyle::None);
-    if (!quickOutput(output, quickOutputMode, outputError)) {
-      qCritical().noquote() << outputError;
+  // Screen Recording cannot be granted in-process, so a capture that needs it
+  // has to stop here and ask. Editing an image needs no permission at all.
+  if (!editingImage) {
+    QString permissionError;
+    if (!mac::ensureScreenRecordingAccess(permissionError)) {
+      qCritical().noquote() << permissionError;
+      mac::openScreenRecordingSettings();
       return 1;
     }
-    return 0;
   }
 
-  QScreen *targetScreen = QGuiApplication::primaryScreen();
-  for (QScreen *screen : QGuiApplication::screens()) {
-    if (screen->name() == capture.monitor.name) {
-      targetScreen = screen;
-      break;
+  SessionOptions options;
+  options.captureMode = captureMode;
+  options.quickOutputMode = quickOutputMode;
+  options.editingImage = editingImage;
+  options.clipboardInput = clipboardInput;
+  options.filePath = filePath;
+
+  if (agentMode) {
+    // The agent outlives every overlay it opens, so closing one must not end
+    // the process, and a termination request only dismisses the overlay.
+    // The agent is a background daemon: a permanent Dock tile for a process
+    // that is idle almost all the time is noise. An ordinary capture keeps its
+    // Dock icon, so the app is visible where a user expects to find it.
+    mac::becomeAccessoryApp();
+    application.setQuitOnLastWindowClosed(false);
+    // A termination request means "give up the screen" while an overlay is up
+    // -- that is how a second FOMOsnap takes over -- and "stop being resident"
+    // when there is nothing to give up. Without the second half, an idle agent
+    // would ignore both SIGTERM and Ctrl-C and need SIGKILL.
+    signalNotifier.setAction([] {
+      if (g_session.active())
+        g_session.stop();
+      else
+        QCoreApplication::quit();
+    });
+
+    QString hotkeySpec = parser.value(hotkeyOption);
+    if (hotkeySpec.isEmpty())
+      hotkeySpec = qEnvironmentVariable("FOMOSNAP_HOTKEY",
+                                        QStringLiteral("ctrl+cmd+4"));
+    quint32 keyCode = 0;
+    quint32 modifiers = 0;
+    QString hotkeyError;
+    if (!mac::parseHotkey(hotkeySpec, keyCode, modifiers, hotkeyError) ||
+        !mac::registerHotkey(keyCode, modifiers, &onHotkey, hotkeyError)) {
+      qCritical().noquote() << hotkeyError;
+      return 1;
     }
+    g_hotkeyOptions = options;
+    qInfo().noquote()
+        << QStringLiteral("FOMOsnap agent ready on %1").arg(hotkeySpec);
+    const int code = application.exec();
+    mac::unregisterHotkey();
+    // Before QApplication goes away: g_session outlives main, and a QWidget
+    // destroyed after its application is a crash on the way out.
+    g_session.stop();
+    return code;
   }
 
-  if (!editingImage) {
-    qInfo().noquote() << QStringLiteral(
-                             "Captured %1 workspace %2 with %3 selectable "
-                             "windows")
-                             .arg(capture.monitor.name)
-                             .arg(capture.monitor.workspaceId)
-                             .arg(capture.windows.size());
+  application.setQuitOnLastWindowClosed(true);
+  bool shown = false;
+  const int code = g_session.start(options, /*watchForClose=*/false, shown);
+  if (code != 0 || !shown) {
+    g_session.stop();
+    return code;
   }
-
-  CaptureEditor editor(std::move(capture), captureMode, quickOutputMode,
-                       restoredLog);
-  editor.setScreen(targetScreen);
-  editor.setGeometry(targetScreen->geometry());
-  editor.winId();
-  QWindow *window = editor.windowHandle();
-  LayerShellQt::Window *layerWindow = LayerShellQt::Window::get(window);
-  if (!window || !layerWindow) {
-    qCritical() << "Could not create capture overlay layer";
-    return 1;
-  }
-  layerWindow->setScope(QStringLiteral("omasnap"));
-  layerWindow->setScreen(targetScreen);
-  layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-  LayerShellQt::Window::Anchors anchors;
-  anchors.setFlag(LayerShellQt::Window::AnchorTop);
-  anchors.setFlag(LayerShellQt::Window::AnchorBottom);
-  anchors.setFlag(LayerShellQt::Window::AnchorLeft);
-  anchors.setFlag(LayerShellQt::Window::AnchorRight);
-  layerWindow->setAnchors(anchors);
-  layerWindow->setExclusiveZone(-1);
-  layerWindow->setKeyboardInteractivity(
-      LayerShellQt::Window::KeyboardInteractivityExclusive);
-  layerWindow->setActivateOnShow(true);
-  editor.setLayerWindow(layerWindow);
-  editor.show();
-  editor.setFocus(Qt::ActiveWindowFocusReason);
-
-  return application.exec();
+  const int exitCode = application.exec();
+  g_session.stop();
+  return exitCode;
 }

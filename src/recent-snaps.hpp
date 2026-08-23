@@ -25,7 +25,7 @@ constexpr int kRecentSnapLimit = 5;
 /// Longest edge of a stored thumbnail, in pixels.
 constexpr int kRecentThumbEdge = 320;
 
-/// `$OMASNAP_RECENT_DIR`, else `$XDG_STATE_HOME/omasnap/recent`. Created on
+/// `$FOMOSNAP_RECENT_DIR`, else `$XDG_STATE_HOME/fomosnap/recent`. Created on
 /// demand; empty when it cannot be.
 [[nodiscard]] QString recentSnapsDirectory();
 
