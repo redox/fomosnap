@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(fomosnap VERSION 2.0.0 LANGUAGES C CXX OBJCXX)
+project(fomosnap VERSION 2.0.1 LANGUAGES C CXX OBJCXX)
 include(GNUInstallDirs)
 include(CTest)
 set(CMAKE_AUTOMOC ON)
@@ -29,6 +29,7 @@ set(FOMOSNAP_MAC_SOURCES
   src/mac/mac-hotkey.mm
   src/mac/mac-ocr.mm
   src/mac/mac-screen.mm
+  src/mac/mac-scroll-inject.mm
   src/mac/mac-window.mm
 )
 
@@ -57,6 +58,9 @@ add_library(fomosnap-core STATIC
   src/overlay-chrome.hpp
   src/eyedropper.cpp
   src/eyedropper.hpp
+  src/scroll-capture.cpp
+  src/scroll-capture.hpp
+  src/scroll-inject.hpp
   src/stitch.cpp
   src/stitch.hpp
   src/auto-capture.cpp
@@ -80,6 +84,7 @@ set_source_files_properties(
   src/mac/mac-hotkey.mm
   src/mac/mac-ocr.mm
   src/mac/mac-screen.mm
+  src/mac/mac-scroll-inject.mm
   src/mac/mac-window.mm
   PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )

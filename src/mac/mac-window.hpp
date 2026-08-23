@@ -40,6 +40,21 @@ void configure(QWindow *window, Level level, Keyboard keyboard,
 void activate(QWindow *window);
 
 /**
+ * Takes or releases the keyboard for an overlay. Releasing deactivates the
+ * process so the application underneath becomes frontmost and can be typed
+ * into and scrolled -- which scroll capture needs, because the page it is
+ * capturing has to stay live under the overlay.
+ */
+void setKeyboardGrab(QWindow *window, bool grab);
+
+/**
+ * Re-asserts that a shielding overlay is invisible to ScreenCaptureKit.
+ * `setMask`, activate, and deactivate can restyle the NSWindow; a live scroll
+ * grab that sees the overlay again freezes every crop as the first frame.
+ */
+void hideFromCapture(QWindow *window);
+
+/**
  * Height in points at the top of this window's screen that the display owns
  * rather than the window: the camera housing on a notched MacBook. A
  * full-screen overlay is placed under it, so anything drawn there is hidden

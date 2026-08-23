@@ -37,6 +37,7 @@ that touches the system was replaced.
 | `src/mac/mac-platform.hpp` | The whole platform surface: capture, OCR, notifications, hotkey, login item |
 | `src/mac/mac-screen.mm` | Display/window discovery and pixel capture via ScreenCaptureKit |
 | `src/mac/mac-window.hpp/.mm` | NSWindow placement for overlays, replacing wlr-layer-shell |
+| `src/mac/mac-scroll-inject.mm` | Auto-scroll wheel injection through `CGEvent` |
 | `src/mac/mac-ocr.mm` | OCR through Vision |
 | `src/mac/mac-app.mm` | Notifications, Dock policy, login item |
 | `src/mac/mac-hotkey.mm` | The system-wide hotkey (Carbon `RegisterEventHotKey`) |
@@ -44,7 +45,8 @@ that touches the system was replaced.
 | `src/capture.cpp/.hpp` | Capture, rendering, output, and source+JSON operation-log persistence |
 | `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, export |
 | `src/pin.cpp/.hpp` | Pinned-capture windows (floating, on every Space) |
-| `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly, kept for the scroll capture that is not built yet |
+| `src/scroll-capture.cpp/.hpp`, `src/scroll-inject.hpp` | Scroll-capture overlay and auto-scroll worker |
+| `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly |
 | `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/FOMOsnap.icns` |
 | `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including process-lifetime checks that run the real executable |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(fomosnap VERSION ...)`) |

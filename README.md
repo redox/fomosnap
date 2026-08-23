@@ -18,7 +18,9 @@ global hotkey were rewritten against macOS frameworks.
 
 ## Features
 
-- Freeform region, window, and full-monitor capture modes.
+- Freeform region, window, full-monitor, and scrolling-region capture modes.
+  Scroll capture stitches a tall (or wide) page: you scroll it, or Auto-scroll
+  drives the wheel for you (Accessibility permission).
 - A pointer-side readout that turns any drag into a ruler: the pointer position
   while the crosshair is idle, then the frame size in native export pixels while a
   region, a hovered window, or a crop handle is being sized.
@@ -66,20 +68,21 @@ global hotkey were rewritten against macOS frameworks.
 | Clipboard | `NSPasteboard`, via Qt |
 | Notifications | `UNUserNotificationCenter`, with a thumbnail; click to reopen |
 | Global hotkey | Carbon `RegisterEventHotKey`, which needs no Accessibility permission |
+| Scroll capture | Live ScreenCaptureKit grabs of the page under the overlay; Auto-scroll posts `CGEvent` wheel events at the region (Accessibility permission) |
 
 Everything Wayland-specific was deleted rather than abstracted, so there is no
 Linux build in this fork. Use upstream for that.
-
-**Not yet ported:** scroll capture (`--scroll`). It needs synthetic wheel events
-posted into another application, which on macOS means `CGEventPost` behind the
-Accessibility permission. The tab is still there and says so; the stitching code
-it feeds is intact.
 
 ### Permissions
 
 FOMOsnap asks for **Screen Recording** the first time it captures. macOS cannot
 grant this to a running process, so the first run explains, opens System
 Settings, and exits — grant it there and start FOMOsnap again.
+
+**Auto-scroll** also needs **Accessibility**, so FOMOsnap can post wheel events
+into the page under the overlay. Manual scroll capture does not. The grant
+cannot take effect in a running process either: allow it, then start FOMOsnap
+again. The agent never asks for Accessibility at launch.
 
 The permission is attached to the app's **code signature**, not its path. The
 default signature is ad-hoc, which has no stable identity: its hash changes with
@@ -225,8 +228,8 @@ Scroll capture stitches a region that is taller (or wider) than the screen:
 fomosnap --scroll
 ```
 
-Drag a region, then pick a direction: **Scroll ↓ / →** scrolls the page
-yourself while fomosnap captures each step, and **Auto ↓ / →** scrolls it for
+Drag a region, then pick a direction: **Manual ↓ / →** scrolls the page
+yourself while FOMOsnap captures each step, and **Auto ↓ / →** scrolls it for
 you, one acknowledged notch at a time, stopping when the page stops moving.
 The frames are aligned and stitched into one image and opened in the editor,
 where `Ctrl`+wheel zooms and the wheel scrolls it.

@@ -40,10 +40,14 @@ void configure(QWindow *window, Level level, Keyboard keyboard,
     return;
 
   // CGShieldingWindowLevel is the level the system's own screen-capture UI
-  // uses: above the menu bar, the Dock, and full-screen apps.
+  // uses: above the menu bar, the Dock, and full-screen apps. SharingNone
+  // keeps ScreenCaptureKit from reading the overlay's backing store: a live
+  // scroll grab would otherwise stitch the frozen first screenshot forever.
   native.level = level == Level::Shielding
                      ? static_cast<NSWindowLevel>(CGShieldingWindowLevel())
                      : NSFloatingWindowLevel;
+  if (level == Level::Shielding)
+    hideFromCapture(window);
 
   NSWindowCollectionBehavior behavior =
       NSWindowCollectionBehaviorFullScreenAuxiliary |
@@ -82,6 +86,31 @@ double safeAreaTopInset(QWindow *window) {
   // safeAreaInsets reports the notch on the built-in display and zero
   // everywhere else, which is exactly the distinction that matters here.
   return static_cast<double>(screen.safeAreaInsets.top);
+}
+
+void hideFromCapture(QWindow *window) {
+  NSWindow *native = nativeWindow(window);
+  if (!native)
+    return;
+  native.level = static_cast<NSWindowLevel>(CGShieldingWindowLevel());
+  native.sharingType = NSWindowSharingNone;
+}
+
+void setKeyboardGrab(QWindow *window, bool grab) {
+  NSWindow *native = nativeWindow(window);
+  if (!native)
+    return;
+  if (grab) {
+    [NSApp activateIgnoringOtherApps:YES];
+    [native makeKeyAndOrderFront:nil];
+    native.ignoresMouseEvents = NO;
+  } else {
+    // Step out of the way entirely: the page under the overlay has to receive
+    // both the keyboard and the wheel events aimed at it.
+    [native resignKeyWindow];
+    [NSApp deactivate];
+  }
+  hideFromCapture(window);
 }
 
 void activate(QWindow *window) {

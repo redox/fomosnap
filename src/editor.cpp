@@ -9,6 +9,7 @@
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
 #include "recent-snaps.hpp"
+#include "scroll-capture.hpp"
 #include "startup-timing.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
@@ -4773,24 +4774,43 @@ void CaptureEditor::commitRegion(const QRectF &region,
 }
 
 void CaptureEditor::startScrollCapture(const QRect &region) {
-  Q_UNUSED(region);
-  // Scroll capture drives the application under the region with synthetic
-  // wheel events. On macOS that means CGEventPost behind the Accessibility
-  // permission, which is not built yet. Re-arm rather than fall back to a
-  // plain region: the user asked for a scrolling capture, and quietly handing
-  // them a different mode would be worse than saying no.
-  setScrollMode(true);
-  setStatus(QStringLiteral("Scroll capture is not available on macOS yet · "
-                           "Space or a tab leaves scroll mode"));
+  if (scrollPanel_ || liveMonitor_.name.isEmpty())
+    return;
+  phase_ = Phase::Select;
+  scrollMode_ = true;
+  windowMode_ = false;
+  dragging_ = false;
+  selection_ = {};
+  auto *panel = new ScrollCapturePanel(liveMonitor_, this);
+  scrollPanel_ = panel;
+  connect(panel, &ScrollCapturePanel::stitched, this,
+          [this](const QImage &image) {
+            endScrollCapture();
+            adoptStitched(image);
+          });
+  connect(panel, &ScrollCapturePanel::dismissed, this, [this] {
+    endScrollCapture();
+    setScrollMode(true);
+  });
+  connect(panel, &ScrollCapturePanel::tabRequested, this,
+          [this](CaptureKind kind) { activateSelectTab(kind); });
+  panel->show();
+  panel->raise();
+  panel->setFocus(Qt::OtherFocusReason);
+  panel->begin(region);
   update();
 }
 
 void CaptureEditor::endScrollCapture() {
   if (!scrollPanel_)
     return;
-  // Deleting restores the surface's mask and keyboard grab.
-  delete scrollPanel_;
+  // deleteLater: stitched/dismissed fire from inside the panel, and a
+  // synchronous delete there is the object tearing itself down mid-event.
+  ScrollCapturePanel *panel = scrollPanel_;
   scrollPanel_ = nullptr;
+  panel->detachSurface();
+  panel->hide();
+  panel->deleteLater();
   setFocus(Qt::OtherFocusReason);
   updatePointerCursor();
   update();
