@@ -2546,6 +2546,14 @@ bool runOpLogSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Could not create op-log reload directory");
     return false;
   }
+  // Drain again before copying. The undo and redo above each queued their own
+  // asynchronous write, and persistence coalesces latest-wins: copying without
+  // waiting can take the log as the undo left it, one operation behind, which
+  // fails the reload check below only when the timing happens to go that way.
+  if (!editor.waitForSnapshot()) {
+    error = QStringLiteral("Op-log working document did not persist the redo");
+    return false;
+  }
   const QString sourceCopy =
       QDir(directory.path()).filePath(QStringLiteral("working.png"));
   const QString logCopy = operationLogPath(sourceCopy);

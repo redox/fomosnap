@@ -270,6 +270,56 @@ bool runLoginItemRoundTrip(const QString &home, QString &error) {
   return true;
 }
 
+/// Only one agent may run per user. Carbon delivers a hotkey to every process
+/// that registered it, so a second agent means two overlays open on one press
+/// and the single-instance handover asks the other to give up the screen --
+/// the overlay flashes and the capture looks like it did nothing.
+bool runSecondAgentDeclines(const QProcessEnvironment &environment,
+                            QString &error) {
+  QProcess first;
+  first.setProcessEnvironment(environment);
+  first.setProgram(QStringLiteral(FOMOSNAP_EXECUTABLE));
+  first.setArguments({QStringLiteral("--agent"), QStringLiteral("--hotkey"),
+                      QStringLiteral("ctrl+alt+shift+f15")});
+  first.start();
+  if (!first.waitForStarted(5000)) {
+    error = QStringLiteral("Could not start the first agent: %1")
+                .arg(first.errorString());
+    return false;
+  }
+  // Let it take the lock before the second one looks for it.
+  if (first.waitForFinished(1500)) {
+    error = QStringLiteral("The first agent exited instead of going resident");
+    return false;
+  }
+
+  const auto stopFirst = [&first] {
+    ::kill(static_cast<pid_t>(first.processId()), SIGTERM);
+    if (!first.waitForFinished(kExitDeadlineMs))
+      first.kill();
+    first.waitForFinished(5000);
+  };
+
+  int exitCode = -1;
+  QString runError;
+  if (!runToExit({QStringLiteral("--agent"), QStringLiteral("--hotkey"),
+                  QStringLiteral("ctrl+alt+shift+f15")},
+                 environment, exitCode, runError)) {
+    stopFirst();
+    error = QStringLiteral("The second agent did not exit: %1").arg(runError);
+    return false;
+  }
+  stopFirst();
+
+  // Exit 0 on purpose: "already running" is the desired end state, and a
+  // non-zero exit would make launchd restart it forever.
+  if (exitCode != 0) {
+    error = QStringLiteral("A second agent exited %1, wanted 0").arg(exitCode);
+    return false;
+  }
+  return true;
+}
+
 /// Usage errors must not reach the overlay at all.
 bool runUsageErrorExits(const QProcessEnvironment &environment,
                         QString &error) {
@@ -310,6 +360,7 @@ bool runSessionExitSmoke(QString &error) {
          runTerminationExits(environment, sourcePath, error) &&
          runAgentExits(environment, error) &&
          runAgentSurvivesMissingPermission(environment, error) &&
+         runSecondAgentDeclines(environment, error) &&
          runLoginItemRoundTrip(home.path(), error) &&
          runUsageErrorExits(environment, error);
 }
