@@ -130,10 +130,9 @@ void postNotification(const QString &message, const QString &imagePath) {
 void becomeAccessoryApp() {
   // No Dock tile and no menu bar: the overlay is summoned by a key, never
   // switched to, and a Dock icon would only be one more thing to dismiss.
-  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  [[NSApplication sharedApplication]
+      setActivationPolicy:NSApplicationActivationPolicyAccessory];
 }
-
-void activateApp() { [NSApp activateIgnoringOtherApps:YES]; }
 
 /// Absolute path of the executable inside this app bundle. The plist needs an
 /// absolute path, and it must be a stable one: under Homebrew the bundle lives

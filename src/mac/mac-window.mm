@@ -1,12 +1,20 @@
 /** @fileoverview NSWindow placement for overlay surfaces. See mac-window.hpp. */
 
 #include "mac-window.hpp"
+#include "mac-platform.hpp"
 
 #import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
 #include <QGuiApplication>
 #include <QWindow>
+
+// AppKit only wires "become key without activating the app" at NSPanel init.
+// Qt creates the panel first, so adding the style bit later needs this to
+// update the WindowServer tag or makeKey: still will not deliver Esc.
+@interface NSWindow (FOMOsnapKeyFocus)
+- (void)_setPreventsActivation:(BOOL)preventsActivation;
+@end
 
 namespace {
 
@@ -27,6 +35,30 @@ namespace {
   // an opaque WId, so the bridge cast is the only way across.
   NSView *view = (__bridge NSView *)reinterpret_cast<void *>(handle);
   return view.window;
+}
+
+void stealKeyboard(NSWindow *native) {
+  if (!native)
+    return;
+  // A normal NSWindow can only be key while this process is the active app,
+  // and cooperative activation will not grant that from a Carbon hotkey.
+  // A nonactivating NSPanel steals key focus at the WindowServer instead,
+  // which is how Spotlight-style overlays take Esc without a click.
+  if ([native isKindOfClass:[NSPanel class]]) {
+    native.hidesOnDeactivate = NO;
+    [(NSPanel *)native setBecomesKeyOnlyIfNeeded:NO];
+    native.styleMask |= NSWindowStyleMaskNonactivatingPanel;
+    if ([native respondsToSelector:@selector(_setPreventsActivation:)])
+      [native _setPreventsActivation:YES];
+  }
+  [native makeKeyAndOrderFront:nil];
+  [native makeFirstResponder:native.contentView];
+}
+
+void releaseKeyboard(NSWindow *native) {
+  if (!native)
+    return;
+  [native resignKeyWindow];
 }
 
 } // namespace
@@ -70,12 +102,8 @@ void configure(QWindow *window, Level level, Keyboard keyboard,
   native.movableByWindowBackground = NO;
   native.ignoresMouseEvents = keyboard == Keyboard::None;
 
-  if (keyboard == Keyboard::Exclusive) {
-    // Order it in as the key window immediately: the capture overlay is
-    // modal in spirit even though nothing about it is a modal session.
-    [NSApp activateIgnoringOtherApps:YES];
-    [native makeKeyAndOrderFront:nil];
-  }
+  if (keyboard == Keyboard::Exclusive)
+    stealKeyboard(native);
 }
 
 double safeAreaTopInset(QWindow *window) {
@@ -101,13 +129,13 @@ void setKeyboardGrab(QWindow *window, bool grab) {
   if (!native)
     return;
   if (grab) {
-    [NSApp activateIgnoringOtherApps:YES];
-    [native makeKeyAndOrderFront:nil];
+    stealKeyboard(native);
     native.ignoresMouseEvents = NO;
   } else {
     // Step out of the way entirely: the page under the overlay has to receive
     // both the keyboard and the wheel events aimed at it.
-    [native resignKeyWindow];
+    releaseKeyboard(native);
+    mac::becomeAccessoryApp();
     [NSApp deactivate];
   }
   hideFromCapture(window);
@@ -115,10 +143,14 @@ void setKeyboardGrab(QWindow *window, bool grab) {
 
 void activate(QWindow *window) {
   NSWindow *native = nativeWindow(window);
+  stealKeyboard(native);
   if (!native)
     return;
-  [NSApp activateIgnoringOtherApps:YES];
-  [native makeKeyAndOrderFront:nil];
+  // Qt's show() can order the window in without making it key, because the
+  // agent is not the active app. Re-steal on the next turn after that.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    stealKeyboard(native);
+  });
 }
 
 } // namespace macwindow

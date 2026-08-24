@@ -35,8 +35,9 @@ enum class Keyboard {
 void configure(QWindow *window, Level level, Keyboard keyboard,
                bool joinsAllSpaces, bool transparent);
 
-/** Raises the window and gives it the keyboard, bringing the process forward
- *  if another app was frontmost. */
+/** Makes the overlay the key window so it receives Esc without a click.
+ *  Does not activate the process: a Dockless agent is not given focus that
+ *  way, and a nonactivating panel steals key events instead. */
 void activate(QWindow *window);
 
 /**
