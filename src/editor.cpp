@@ -1768,7 +1768,7 @@ QRectF CaptureEditor::baseImageRect() const {
 
 QRectF CaptureEditor::editImageRect() const {
   const QRectF base = baseImageRect();
-  if (base.isEmpty() || viewZoom_ <= 1.0)
+  if (base.isEmpty() || qFuzzyCompare(viewZoom_, 1.0))
     return base.translated(viewOffset_);
   const QSizeF shown = base.size() * viewZoom_;
   const QPointF center = base.center();
@@ -1808,7 +1808,9 @@ void CaptureEditor::clampViewOffset() {
 }
 
 void CaptureEditor::setViewZoom(qreal zoom, const QPointF &focus) {
-  const qreal clamped = std::clamp(zoom, 1.0, maxViewZoom());
+  // Down to a tenth: an overview of a tall stitch or a large capture is
+  // as legitimate as a closeup.
+  const qreal clamped = std::clamp(zoom, 0.10, maxViewZoom());
   if (qFuzzyCompare(clamped, viewZoom_))
     return;
   const QRectF before = editImageRect();
