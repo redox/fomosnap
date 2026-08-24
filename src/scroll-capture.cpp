@@ -114,7 +114,9 @@ struct ScrollCapturePanel::Worker {
   QString debugDir;
   /// Notches per normal automatic tick, fitted to the region once the first
   /// verified step says how far one notch moves this page.
-  int notchesPerTick = stitch::kNotchesPerTick;
+  /// Starts at one notch, which overlaps on any page, and is fitted to the
+  /// region once the first verified step says how far one notch moves here.
+  int notchesPerTick = 1;
   bool notchesFitted = false;
 
   /// Crop of the region from a full output frame, in the stitcher's format.
@@ -188,15 +190,21 @@ ScrollCapturePanel::ScrollCapturePanel(MonitorInfo monitor, QWidget *parent)
     setGeometry(parent->rect());
 }
 
-ScrollCapturePanel::~ScrollCapturePanel() { detachSurface(); }
+ScrollCapturePanel::~ScrollCapturePanel() { release(); }
 
-void ScrollCapturePanel::detachSurface() {
+void ScrollCapturePanel::detachSurface() { release(); }
+
+void ScrollCapturePanel::release() {
+  if (released_)
+    return;
+  released_ = true;
   stopWorker();
   // Hand the surface back whole: no hole, keyboard exclusive again.
   if (QWindow *window = surfaceWindow()) {
     window->setMask(QRegion());
     macwindow::setKeyboardGrab(window, true);
   }
+  hide();
 }
 
 QWindow *ScrollCapturePanel::surfaceWindow() const {
@@ -337,13 +345,10 @@ void ScrollCapturePanel::startCapture(Mode mode, stitch::Axis axis) {
   // Automatic: the injection worker scrolls one acknowledged tick at a time.
   injectorStop_ = std::make_shared<std::atomic<bool>>(false);
   handshake_ = std::make_shared<stitch::CaptureHandshake>();
-  // Address the wheel at the centre of the region: a corner is where a
-  // slightly generous region spills onto a neighbouring window. Global, in
-  // points: the event carries this location, so the pointer never moves.
-  const QPoint scrollAt =
-      monitor_.geometry.topLeft() +
-      QPoint(qRound(region_.x() + region_.width() / 2.0),
-             qRound(region_.y() + region_.height() / 2.0));
+  // Address the wheel at the park point: global, in points, so the event
+  // carries this location and the pointer never moves.
+  const auto [parkX, parkY] = autoScrollParkPoint();
+  const QPoint scrollAt = monitor_.geometry.topLeft() + QPoint(parkX, parkY);
   setStatus(QStringLiteral(
       "Auto-scrolling… · Done stitches it · Back or Cancel stops"));
   // Spawn after this frame's commit so the input-region hole and the released
@@ -539,12 +544,16 @@ void ScrollCapturePanel::autoCaptureLoop() {
     if (out.event == Event::Seeded)
       w.firstCrop = cropped;
     qInfo().noquote() << QStringLiteral("auto grab %1 cycle %2: event=%3 ack=%4 "
-                                        "delta=%5 kept=%6 notches=%7")
+                                        "delta=%5/%6/%7 halt=%8 kept=%9 "
+                                        "notches=%10")
                              .arg(w.grabbed)
                              .arg(cycle)
                              .arg(static_cast<int>(out.event))
                              .arg(static_cast<int>(out.ack))
                              .arg(out.estimate.motion.delta)
+                             .arg(out.firstDelta)
+                             .arg(out.secondDelta)
+                             .arg(static_cast<int>(out.haltReason))
                              .arg(w.autoSession.keptFrames())
                              .arg(w.notchesPerTick);
     if (out.event == Event::Blank) {
@@ -557,10 +566,17 @@ void ScrollCapturePanel::autoCaptureLoop() {
     // notch moves a different distance in every application (and with every
     // scroll_factor), and the stitcher needs the frames to overlap by about
     // half whatever that turns out to be.
-    if (!w.notchesFitted && out.event == Event::Appended &&
-        out.estimate.motion.delta > 0) {
-      const double perNotch =
-          static_cast<double>(out.estimate.motion.delta) / w.notchesPerTick;
+    // A verified step arrives as Appended (its delta in the estimate) or,
+    // after a probe, as Committed (first tick then the one-notch probe: the
+    // probe is the cleaner per-notch figure).
+    double perNotch = 0.0;
+    if (out.event == Event::Appended && out.estimate.motion.delta > 0)
+      perNotch = static_cast<double>(out.estimate.motion.delta) / w.notchesPerTick;
+    else if (out.event == Event::Committed && out.secondDelta > 0)
+      perNotch = out.secondDelta / static_cast<double>(stitch::kProbeNotches);
+    else if (out.event == Event::Committed && out.firstDelta > 0)
+      perNotch = static_cast<double>(out.firstDelta) / w.notchesPerTick;
+    if (!w.notchesFitted && perNotch > 0.0) {
       const int extent = axis_ == stitch::Axis::Vertical
                              ? w.regionPhysical.height()
                              : w.regionPhysical.width();
@@ -729,6 +745,19 @@ void ScrollCapturePanel::switchMode(Mode mode) {
   startCapture(mode, axis);
 }
 
+std::pair<int, int> ScrollCapturePanel::autoScrollParkPoint() const {
+  // Bottom-right corner, inset 10% of the region so the point stays inside
+  // it: a corner is more often page margin than a centre, which is where
+  // hero content (a video, an embed) tends to sit and swallow the wheel
+  // once the page has scrolled it under the parked point. Logical points:
+  // the injected event carries this location, so the pointer never moves.
+  const qreal insetX = region_.width() * 0.10;
+  const qreal insetY = region_.height() * 0.10;
+  const int x = qRound(region_.x() + region_.width() - insetX);
+  const int y = qRound(region_.y() + region_.height() - insetY);
+  return {x, y};
+}
+
 void ScrollCapturePanel::continueCapture() {
   // Picks the same capture back up: the session keeps every band it already
   // has, so this carries on from the last one rather than starting a second
@@ -745,10 +774,8 @@ void ScrollCapturePanel::continueCapture() {
   worker_->lastCycle = 0; // a new handshake counts from one again
   injectorStop_ = std::make_shared<std::atomic<bool>>(false);
   handshake_ = std::make_shared<stitch::CaptureHandshake>();
-  const QPoint scrollAt =
-      monitor_.geometry.topLeft() +
-      QPoint(qRound(region_.x() + region_.width() / 2.0),
-             qRound(region_.y() + region_.height() / 2.0));
+  const auto [parkX, parkY] = autoScrollParkPoint();
+  const QPoint scrollAt = monitor_.geometry.topLeft() + QPoint(parkX, parkY);
   setStatus(QStringLiteral(
       "Auto-scrolling… · Done stitches it · Back or Cancel stops"));
   update();
