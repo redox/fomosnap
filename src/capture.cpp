@@ -100,6 +100,110 @@ QRectF annotationTextBounds(const Annotation &annotation) {
       annotation.textBackground);
 }
 
+QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
+                         const QVector<Annotation> &annotations) {
+  QRectF canvas(QPointF(), sourceFrameSize);
+  if (canvas.isEmpty())
+    return {};
+
+  const auto pointBounds = [](const QVector<QPointF> &points) {
+    if (points.isEmpty())
+      return QRectF();
+    qreal left = points.constFirst().x();
+    qreal right = left;
+    qreal top = points.constFirst().y();
+    qreal bottom = top;
+    for (const QPointF &point : points) {
+      left = std::min(left, point.x());
+      right = std::max(right, point.x());
+      top = std::min(top, point.y());
+      bottom = std::max(bottom, point.y());
+    }
+    return QRectF(QPointF(left, top), QPointF(right, bottom));
+  };
+  const auto paintedBounds = [&](const Annotation &annotation) {
+    // Redaction only replaces pixels inside the source frame. Its geometry
+    // can extend past that frame, but there are no painted pixels there for a
+    // larger canvas to reveal.
+    if (annotation.kind == Annotation::Kind::Redaction)
+      return QRectF();
+    if (annotation.kind == Annotation::Kind::Text)
+      return annotationTextBounds(annotation).adjusted(-1, -1, 1, 1);
+    if (annotation.kind == Annotation::Kind::Marker) {
+      const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
+      const qreal antialias =
+          std::max<qreal>(1.0, annotation.size * 0.35) / 2.0 + 1.0;
+      return QRectF(annotation.start.x() - diameter / 2.0,
+                    annotation.start.y() - diameter / 2.0, diameter, diameter)
+          .adjusted(-antialias, -antialias, antialias, antialias);
+    }
+    if (annotation.kind == Annotation::Kind::Freehand ||
+        annotation.kind == Annotation::Kind::Highlighter) {
+      if (annotation.points.size() < 2)
+        return QRectF();
+      const qreal width =
+          annotation.kind == Annotation::Kind::Highlighter
+              ? std::max<qreal>(6.0, annotation.size * 3.0)
+              : std::max<qreal>(2.0, annotation.size);
+      const qreal extent = width / 2.0 + 1.0;
+      return pointBounds(annotation.points)
+          .adjusted(-extent, -extent, extent, extent);
+    }
+
+    QRectF bounds(annotation.start, annotation.end);
+    bounds = bounds.normalized();
+    if (annotation.kind == Annotation::Kind::Arrow) {
+      const QLineF line(annotation.start, annotation.end);
+      if (line.length() >= 1.0) {
+        const qreal angle = std::atan2(line.dy(), line.dx());
+        const qreal headLength = std::max<qreal>(14.0, annotation.size * 4.2);
+        const qreal halfWidth = headLength * 0.46;
+        const QPointF direction(std::cos(angle), std::sin(angle));
+        const QPointF perpendicular(-direction.y(), direction.x());
+        const QPointF base = annotation.end - direction * headLength;
+        bounds = pointBounds({annotation.start, annotation.end,
+                              base + perpendicular * halfWidth,
+                              base - perpendicular * halfWidth});
+      }
+    }
+    qreal extent = 1.0;
+    if (annotation.kind == Annotation::Kind::Line ||
+        annotation.kind == Annotation::Kind::Arrow ||
+        ((annotation.kind == Annotation::Kind::Rectangle ||
+          annotation.kind == Annotation::Kind::Ellipse) &&
+         !annotation.filled)) {
+      extent += std::max<qreal>(2.0, annotation.size) / 2.0;
+    } else if (annotation.kind == Annotation::Kind::Spotlight) {
+      extent += std::max<qreal>(1.0, annotation.size / 2.0) / 2.0;
+    }
+    return bounds.adjusted(-extent, -extent, extent, extent);
+  };
+
+  for (const Annotation &annotation : annotations) {
+    const QRectF bounds = paintedBounds(annotation);
+    if (!bounds.isNull())
+      canvas = canvas.united(bounds);
+  }
+
+  // Quantize only newly exposed strips. A fractional crop is itself the
+  // stable source frame; rounding its untouched right/bottom edges would look
+  // like growth and would resample an otherwise exact native-pixel export.
+  const QRectF sourceFrame(QPointF(), sourceFrameSize);
+  const qreal left = canvas.left() < sourceFrame.left()
+                         ? std::floor(canvas.left())
+                         : sourceFrame.left();
+  const qreal top = canvas.top() < sourceFrame.top()
+                        ? std::floor(canvas.top())
+                        : sourceFrame.top();
+  const qreal right = canvas.right() > sourceFrame.right()
+                          ? std::ceil(canvas.right())
+                          : sourceFrame.right();
+  const qreal bottom = canvas.bottom() > sourceFrame.bottom()
+                           ? std::ceil(canvas.bottom())
+                           : sourceFrame.bottom();
+  return {left, top, right - left, bottom - top};
+}
+
 bool ensurePrivateDirectory(const QString &path) {
   if (path.isEmpty())
     return false;
@@ -628,6 +732,11 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle) {
   if (backgroundStyle == BackgroundStyle::None)
     return;
+  if (backgroundStyle == BackgroundStyle::Slate) {
+    // Slate is the opaque mat; the image shadow is painted separately.
+    painter.fillRect(bounds, QColor(QStringLiteral("#242424")));
+    return;
+  }
 
   struct Blob {
     QPointF center;
@@ -692,6 +801,33 @@ void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
     gradient.setColorAt(1, edge);
     painter.fillRect(bounds, gradient);
   }
+}
+
+void paintCaptureImageShadow(QPainter &painter, const QRectF &imageRect,
+                             qreal scaleX, qreal scaleY) {
+  const qreal scale = std::max(scaleX, scaleY);
+  painter.save();
+  painter.setPen(Qt::NoPen);
+
+  // Approximate a 40 px key shadow with a 14 px offset and a 12 px ambient
+  // halo. Keep the solid contour rings faint so stacking does not darken the
+  // image edge.
+  for (int layer = 14; layer > 0; --layer) {
+    const qreal spread = layer * scale * (40.0 / 14.0);
+    painter.setBrush(QColor(0, 0, 0, 6));
+    painter.drawRoundedRect(
+        imageRect.adjusted(-spread, -spread + 14 * scaleY, spread,
+                           spread + 14 * scaleY),
+        spread, spread);
+  }
+  for (int layer = 8; layer > 0; --layer) {
+    const qreal spread = layer * scale * (12.0 / 8.0);
+    painter.setBrush(QColor(0, 0, 0, 6));
+    painter.drawRoundedRect(imageRect.adjusted(-spread, -spread, spread,
+                                               spread),
+                            spread, spread);
+  }
+  painter.restore();
 }
 
 bool probeFocusedMonitor(MonitorInfo &monitor, QString &error) {
@@ -766,7 +902,7 @@ bool captureFocusedMonitor(CaptureData &capture, bool includeWindows,
 
 QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                      const QVector<Annotation> &annotations,
-                     BackgroundStyle backgroundStyle) {
+                     BackgroundStyle backgroundStyle, bool imageShadow) {
   const QRect pixels = pixelSelection(capture, selection);
   if (pixels.isEmpty())
     return {};
@@ -801,7 +937,73 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   applyRedactions(cropped, annotations, resized ? scaleX : sourceScaleX,
                   resized ? scaleY : sourceScaleY,
                   resized ? QPointF{} : sourceOriginOffset);
-  const bool hasBackground = backgroundStyle != BackgroundStyle::None;
+  const QRectF sourceFrame(QPointF(), selection.size());
+  const QRectF canvas = captureCanvasRect(selection.size(), annotations);
+  const bool canvasGrown = canvas.left() < sourceFrame.left() - 0.001 ||
+                           canvas.top() < sourceFrame.top() - 0.001 ||
+                           canvas.right() > sourceFrame.right() + 0.001 ||
+                           canvas.bottom() > sourceFrame.bottom() + 0.001;
+  const BackgroundStyle effectiveBackground =
+      canvasGrown && backgroundStyle == BackgroundStyle::None
+          ? BackgroundStyle::Slate
+          : backgroundStyle;
+
+  if (canvasGrown) {
+    // The source frame and annotation canvas are intentionally separate.
+    // New strips are rendered from the stable source on every frame instead
+    // of copying an already-expanded raster, so repeated growth cannot leave
+    // seams or drift existing pixels. Integer logical canvas edges make the
+    // settle after a drag deterministic at every display scale.
+    const int growLeft = std::max(
+        0, static_cast<int>(std::ceil(-canvas.left() * scaleX)));
+    const int growTop =
+        std::max(0, static_cast<int>(std::ceil(-canvas.top() * scaleY)));
+    const int growRight = std::max(
+        0, static_cast<int>(std::ceil(
+               (canvas.right() - sourceFrame.right()) * scaleX)));
+    const int growBottom = std::max(
+        0, static_cast<int>(std::ceil(
+               (canvas.bottom() - sourceFrame.bottom()) * scaleY)));
+    QImage output(cropped.width() + growLeft + growRight,
+                  cropped.height() + growTop + growBottom,
+                  QImage::Format_ARGB32_Premultiplied);
+    output.fill(Qt::transparent);
+
+    QPainter painter(&output);
+    painter.setRenderHints(QPainter::Antialiasing |
+                           QPainter::SmoothPixmapTransform |
+                           QPainter::TextAntialiasing);
+    paintCaptureBackground(painter, output.rect(), effectiveBackground);
+    // The extension is one continuous mat. Its shadow belongs only to the
+    // original source card; annotations paint over both in the next pass.
+    const QRectF imageRect(growLeft, growTop, cropped.width(), cropped.height());
+    if (imageShadow)
+      paintCaptureImageShadow(painter, imageRect, scaleX, scaleY);
+    painter.drawImage(imageRect.topLeft(), cropped);
+    painter.end();
+
+    const bool hasSpotlight = std::any_of(
+        annotations.cbegin(), annotations.cend(), [](const Annotation &item) {
+          return item.kind == Annotation::Kind::Spotlight;
+        });
+    // A spotlight samples the fully composed mat. Avoid detaching/copying the
+    // full grown image for the common case where annotations only paint over
+    // it, and never copy an image while a painter is active on that device.
+    const QImage layerSource = hasSpotlight ? output.copy() : cropped;
+    const QRectF layerBounds = hasSpotlight ? canvas : sourceFrame;
+    QPainter layerPainter(&output);
+    layerPainter.setRenderHints(QPainter::Antialiasing |
+                                QPainter::SmoothPixmapTransform |
+                                QPainter::TextAntialiasing);
+    layerPainter.translate(growLeft, growTop);
+    layerPainter.scale(scaleX, scaleY);
+    layerPainter.setClipRect(canvas);
+    paintDefaultLayer(layerPainter, layerSource, layerBounds, annotations);
+    layerPainter.end();
+    return output;
+  }
+
+  const bool hasBackground = effectiveBackground != BackgroundStyle::None;
   const int marginX =
       hasBackground ? static_cast<int>(std::round(64.0 * scaleX)) : 0;
   const int marginY =
@@ -815,23 +1017,10 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                          QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
   if (hasBackground) {
-    paintCaptureBackground(painter, output.rect(), backgroundStyle);
+    paintCaptureBackground(painter, output.rect(), effectiveBackground);
     const QRectF imageRect(marginX, marginY, cropped.width(), cropped.height());
-    painter.setPen(Qt::NoPen);
-    for (int layer = 24; layer > 0; --layer) {
-      const qreal spread = layer * std::max(scaleX, scaleY) * 0.85;
-      painter.setBrush(QColor(0, 0, 0, 2 + (24 - layer) / 5));
-      painter.drawRoundedRect(imageRect.adjusted(-spread, -spread + 14 * scaleY,
-                                                 spread, spread + 14 * scaleY),
-                              16 * scaleX + spread, 16 * scaleY + spread);
-    }
-    for (int layer = 12; layer > 0; --layer) {
-      const qreal spread = layer * std::max(scaleX, scaleY) * 0.45;
-      painter.setBrush(QColor(0, 0, 0, 3 + (12 - layer)));
-      painter.drawRoundedRect(imageRect.adjusted(-spread, -spread + 8 * scaleY,
-                                                 spread, spread + 8 * scaleY),
-                              14 * scaleX + spread, 14 * scaleY + spread);
-    }
+    if (imageShadow)
+      paintCaptureImageShadow(painter, imageRect, scaleX, scaleY);
     QPainterPath clip;
     clip.addRoundedRect(imageRect, 14 * scaleX, 14 * scaleY);
     painter.save();
@@ -1237,6 +1426,8 @@ QString backgroundStyleName(BackgroundStyle style) {
   switch (style) {
   case BackgroundStyle::None:
     return QStringLiteral("none");
+  case BackgroundStyle::Slate:
+    return QStringLiteral("slate");
   case BackgroundStyle::Aurora:
     return QStringLiteral("aurora");
   case BackgroundStyle::Sunset:
@@ -1252,6 +1443,8 @@ QString backgroundStyleName(BackgroundStyle style) {
 bool backgroundStyleFromName(const QString &name, BackgroundStyle &style) {
   if (name == QStringLiteral("none"))
     style = BackgroundStyle::None;
+  else if (name == QStringLiteral("slate"))
+    style = BackgroundStyle::Slate;
   else if (name == QStringLiteral("aurora"))
     style = BackgroundStyle::Aurora;
   else if (name == QStringLiteral("sunset"))
@@ -1396,6 +1589,7 @@ QJsonObject operationToJson(const Operation &operation) {
     object.insert(QStringLiteral("type"), QStringLiteral("background"));
     object.insert(QStringLiteral("style"),
                   backgroundStyleName(operation.background));
+    object.insert(QStringLiteral("shadow"), operation.imageShadow);
     break;
   case Operation::Type::Annotate:
     object.insert(QStringLiteral("type"), QStringLiteral("annotate"));
@@ -1449,6 +1643,7 @@ bool operationFromJson(const QJsonObject &object, Operation &operation,
       error = QStringLiteral("Operation log has an unknown background style");
       return false;
     }
+    operation.imageShadow = object.value(QStringLiteral("shadow")).toBool(true);
     return true;
   }
   if (type == QStringLiteral("annotate")) {
