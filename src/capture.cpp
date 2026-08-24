@@ -38,6 +38,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+constexpr qreal kBackdropMargin = 64.0;
+
 bool loadCaptureFonts() {
   static const std::array<int, 3> fontIds{
       QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf")),
@@ -185,22 +187,24 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
       canvas = canvas.united(bounds);
   }
 
-  // Quantize only newly exposed strips. A fractional crop is itself the
-  // stable source frame; rounding its untouched right/bottom edges would look
-  // like growth and would resample an otherwise exact native-pixel export.
   const QRectF sourceFrame(QPointF(), sourceFrameSize);
-  const qreal left = canvas.left() < sourceFrame.left()
-                         ? std::floor(canvas.left())
-                         : sourceFrame.left();
-  const qreal top = canvas.top() < sourceFrame.top()
-                        ? std::floor(canvas.top())
-                        : sourceFrame.top();
-  const qreal right = canvas.right() > sourceFrame.right()
-                          ? std::ceil(canvas.right())
-                          : sourceFrame.right();
-  const qreal bottom = canvas.bottom() > sourceFrame.bottom()
-                           ? std::ceil(canvas.bottom())
-                           : sourceFrame.bottom();
+  const bool growsLeft = canvas.left() < sourceFrame.left();
+  const bool growsTop = canvas.top() < sourceFrame.top();
+  const bool growsRight = canvas.right() > sourceFrame.right();
+  const bool growsBottom = canvas.bottom() > sourceFrame.bottom();
+  if (!growsLeft && !growsTop && !growsRight && !growsBottom)
+    return sourceFrame;
+
+  // Begin with the same frame as a regular backdrop, then extend only a side
+  // whose annotation exceeds it. Source and layer coordinates stay fixed.
+  const QRectF backdropFrame = sourceFrame.adjusted(
+      -kBackdropMargin, -kBackdropMargin, kBackdropMargin, kBackdropMargin);
+  const qreal left = std::floor(std::min(canvas.left(), backdropFrame.left()));
+  const qreal top = std::floor(std::min(canvas.top(), backdropFrame.top()));
+  const qreal right =
+      std::ceil(std::max(canvas.right(), backdropFrame.right()));
+  const qreal bottom =
+      std::ceil(std::max(canvas.bottom(), backdropFrame.bottom()));
   return {left, top, right - left, bottom - top};
 }
 
@@ -1005,9 +1009,13 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
 
   const bool hasBackground = effectiveBackground != BackgroundStyle::None;
   const int marginX =
-      hasBackground ? static_cast<int>(std::round(64.0 * scaleX)) : 0;
+      hasBackground
+          ? static_cast<int>(std::round(kBackdropMargin * scaleX))
+          : 0;
   const int marginY =
-      hasBackground ? static_cast<int>(std::round(64.0 * scaleY)) : 0;
+      hasBackground
+          ? static_cast<int>(std::round(kBackdropMargin * scaleY))
+          : 0;
   QImage output(cropped.width() + marginX * 2, cropped.height() + marginY * 2,
                 QImage::Format_ARGB32_Premultiplied);
   output.fill(Qt::transparent);
