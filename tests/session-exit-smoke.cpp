@@ -255,6 +255,12 @@ bool runLoginItemRoundTrip(const QString &home, QString &error) {
     error = QStringLiteral("The login item would not start at login");
     return false;
   }
+  if (!contents.contains(QStringLiteral("<key>KeepAlive</key>\n"
+                                        "  <true/>"))) {
+    error = QStringLiteral(
+        "The login item would not restart the agent after Quit & Reopen");
+    return false;
+  }
 
   if (!runToExit({QStringLiteral("--uninstall-agent")}, environment, exitCode,
                  error))

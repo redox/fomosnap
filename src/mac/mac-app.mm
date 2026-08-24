@@ -220,10 +220,10 @@ bool setLaunchAtLogin(bool enabled, QString &error) {
           "  <array>\n    <string>%2</string>\n    <string>--agent</string>\n"
           "  </array>\n"
           "  <key>RunAtLoad</key>\n  <true/>\n"
-          // Restart on a crash, but respect a deliberate quit: SIGTERM on an
-          // idle agent exits cleanly and should stay exited.
-          "  <key>KeepAlive</key>\n"
-          "  <dict>\n    <key>SuccessfulExit</key>\n    <false/>\n  </dict>\n"
+          // launchd must restore the agent after macOS quits it for a
+          // permission change. An explicit --uninstall-agent removes the
+          // plist, which remains the opt-out.
+          "  <key>KeepAlive</key>\n  <true/>\n"
           // A floor on restarts. If the agent ever does fail at launch, this
           // is the difference between a slow retry and a tight loop that
           // raises a system prompt every time round.
