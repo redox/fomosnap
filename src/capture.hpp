@@ -48,8 +48,8 @@ struct CaptureData {
   QVector<WindowTarget> windows;
 };
 
-enum class BackgroundStyle { None, Slate, Aurora, Sunset, Lagoon, Violet };
-enum class CanvasBoundaryMode { Grow, Frame, Image };
+enum class BackgroundStyle { None, Off, Slate, Aurora, Sunset, Lagoon, Violet };
+enum class CanvasBoundaryMode { Framed, Overflow, Image };
 enum class QuickOutputMode { None, Copy, Save, Both };
 
 enum class SpotlightShape { Ellipse, Rectangle, RoundedRectangle };
@@ -108,7 +108,7 @@ struct Operation {
   QRectF crop;
   BackgroundStyle background = BackgroundStyle::None;
   bool imageShadow = true;
-  CanvasBoundaryMode canvasBoundary = CanvasBoundaryMode::Grow;
+  CanvasBoundaryMode canvasBoundary = CanvasBoundaryMode::Framed;
   QVector<Annotation> annotations;
   QVector<quint64> ids;
   CutOp cut;
@@ -180,7 +180,7 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] QRectF
 captureCanvasRect(const QSizeF &sourceFrameSize,
                   const QVector<Annotation> &annotations,
-                  CanvasBoundaryMode boundaryMode = CanvasBoundaryMode::Grow);
+                  CanvasBoundaryMode boundaryMode = CanvasBoundaryMode::Framed);
 /** A repeatable capture session for one display (`MonitorInfo::name`): open
  *  once, then grab frames repeatedly. A scroll capture takes many per second
  *  and must not pay a process spawn for each. Frames are captured without the
@@ -230,7 +230,7 @@ void describeFileCapture(CaptureData &capture, QImage image,
                                    BackgroundStyle backgroundStyle,
                                    bool imageShadow = true,
                                    CanvasBoundaryMode boundaryMode =
-                                       CanvasBoundaryMode::Grow);
+                                       CanvasBoundaryMode::Framed);
 /** Loads the current clipboard image. */
 [[nodiscard]] bool loadClipboardImage(QImage &image, QString &error);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);

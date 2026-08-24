@@ -199,12 +199,19 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
   if (!growsLeft && !growsTop && !growsRight && !growsBottom)
     return sourceFrame;
 
-  // Begin with the same frame as a regular backdrop, then extend only a side
-  // whose annotation exceeds it. Source and layer coordinates stay fixed.
+  if (boundaryMode == CanvasBoundaryMode::Overflow) {
+    const qreal left = std::floor(canvas.left());
+    const qreal top = std::floor(canvas.top());
+    const qreal right = std::ceil(canvas.right());
+    const qreal bottom = std::ceil(canvas.bottom());
+    return {left, top, right - left, bottom - top};
+  }
+
+  // Framed mode begins with the same frame as a regular backdrop, then
+  // extends only a side whose annotation exceeds it. Source and layer
+  // coordinates stay fixed.
   const QRectF backdropFrame = sourceFrame.adjusted(
       -kBackdropMargin, -kBackdropMargin, kBackdropMargin, kBackdropMargin);
-  if (boundaryMode == CanvasBoundaryMode::Frame)
-    return backdropFrame;
   const qreal left = std::floor(std::min(canvas.left(), backdropFrame.left()));
   const qreal top = std::floor(std::min(canvas.top(), backdropFrame.top()));
   const qreal right =
@@ -740,7 +747,8 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
 
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle) {
-  if (backgroundStyle == BackgroundStyle::None)
+  if (backgroundStyle == BackgroundStyle::None ||
+      backgroundStyle == BackgroundStyle::Off)
     return;
   if (backgroundStyle == BackgroundStyle::Slate) {
     // Slate is the opaque mat; the image shadow is painted separately.
@@ -955,10 +963,13 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                            canvas.top() < sourceFrame.top() - 0.001 ||
                            canvas.right() > sourceFrame.right() + 0.001 ||
                            canvas.bottom() > sourceFrame.bottom() + 0.001;
+  const bool automaticFramedBackground =
+      boundaryMode == CanvasBoundaryMode::Framed && canvasGrown &&
+      backgroundStyle == BackgroundStyle::None;
   const BackgroundStyle effectiveBackground =
-      canvasGrown && backgroundStyle == BackgroundStyle::None
-          ? BackgroundStyle::Slate
-          : backgroundStyle;
+      automaticFramedBackground ? BackgroundStyle::Slate : backgroundStyle;
+  const bool hasBackground = effectiveBackground != BackgroundStyle::None &&
+                             effectiveBackground != BackgroundStyle::Off;
 
   if (canvasGrown) {
     // The source frame and annotation canvas are intentionally separate.
@@ -989,7 +1000,7 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
     // The extension is one continuous mat. Its shadow belongs only to the
     // original source card; annotations paint over both in the next pass.
     const QRectF imageRect(growLeft, growTop, cropped.width(), cropped.height());
-    if (imageShadow)
+    if (imageShadow && hasBackground)
       paintCaptureImageShadow(painter, imageRect, scaleX, scaleY);
     painter.drawImage(imageRect.topLeft(), cropped);
     painter.end();
@@ -1015,13 +1026,14 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
     return output;
   }
 
-  const bool hasBackground = effectiveBackground != BackgroundStyle::None;
+  const bool framedBackground =
+      hasBackground && boundaryMode == CanvasBoundaryMode::Framed;
   const int marginX =
-      hasBackground
+      framedBackground
           ? static_cast<int>(std::round(kBackdropMargin * scaleX))
           : 0;
   const int marginY =
-      hasBackground
+      framedBackground
           ? static_cast<int>(std::round(kBackdropMargin * scaleY))
           : 0;
   QImage output(cropped.width() + marginX * 2, cropped.height() + marginY * 2,
@@ -1032,7 +1044,7 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   painter.setRenderHints(QPainter::Antialiasing |
                          QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
-  if (hasBackground) {
+  if (framedBackground) {
     paintCaptureBackground(painter, output.rect(), effectiveBackground);
     const QRectF imageRect(marginX, marginY, cropped.width(), cropped.height());
     if (imageShadow)
@@ -1442,6 +1454,8 @@ QString backgroundStyleName(BackgroundStyle style) {
   switch (style) {
   case BackgroundStyle::None:
     return QStringLiteral("none");
+  case BackgroundStyle::Off:
+    return QStringLiteral("off");
   case BackgroundStyle::Slate:
     return QStringLiteral("slate");
   case BackgroundStyle::Aurora:
@@ -1459,6 +1473,8 @@ QString backgroundStyleName(BackgroundStyle style) {
 bool backgroundStyleFromName(const QString &name, BackgroundStyle &style) {
   if (name == QStringLiteral("none"))
     style = BackgroundStyle::None;
+  else if (name == QStringLiteral("off"))
+    style = BackgroundStyle::Off;
   else if (name == QStringLiteral("slate"))
     style = BackgroundStyle::Slate;
   else if (name == QStringLiteral("aurora"))
@@ -1496,22 +1512,22 @@ TextFont textFontFromStyleName(const QString &name) {
 
 QString canvasBoundaryModeName(CanvasBoundaryMode mode) {
   switch (mode) {
-  case CanvasBoundaryMode::Grow:
-    return QStringLiteral("grow");
-  case CanvasBoundaryMode::Frame:
-    return QStringLiteral("frame");
+  case CanvasBoundaryMode::Framed:
+    return QStringLiteral("framed");
+  case CanvasBoundaryMode::Overflow:
+    return QStringLiteral("overflow");
   case CanvasBoundaryMode::Image:
     return QStringLiteral("image");
   }
-  return QStringLiteral("grow");
+  return QStringLiteral("framed");
 }
 
 bool canvasBoundaryModeFromName(const QString &name,
                                 CanvasBoundaryMode &mode) {
-  if (name == QStringLiteral("grow"))
-    mode = CanvasBoundaryMode::Grow;
-  else if (name == QStringLiteral("frame"))
-    mode = CanvasBoundaryMode::Frame;
+  if (name == QStringLiteral("framed"))
+    mode = CanvasBoundaryMode::Framed;
+  else if (name == QStringLiteral("overflow"))
+    mode = CanvasBoundaryMode::Overflow;
   else if (name == QStringLiteral("image"))
     mode = CanvasBoundaryMode::Image;
   else
