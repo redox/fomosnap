@@ -652,9 +652,8 @@ int main(int argc, char **argv) {
 
     // The agent outlives every overlay it opens, so closing one must not end
     // the process, and a termination request only dismisses the overlay.
-    // The agent is a background daemon: a permanent Dock tile for a process
-    // that is idle almost all the time is noise. An ordinary capture keeps its
-    // Dock icon, so the app is visible where a user expects to find it.
+    // FOMOsnap is a Dockless utility in every mode; the bundle's LSUIElement
+    // setting also keeps the permission-relaunch instance out of the Dock.
     mac::becomeAccessoryApp();
     application.setQuitOnLastWindowClosed(false);
     // SIGUSR1 opens or dismisses the overlay, exactly as the hotkey does.

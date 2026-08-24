@@ -27,7 +27,7 @@ LINT_SOURCES := $(wildcard src/*.cpp tests/*.cpp)
 # and the platform layer is small enough to review by eye.
 LINT_CHECKS ?= -*,clang-analyzer-*,bugprone-*,performance-*,misc-*
 
-.PHONY: all configure build clean check cask-check signing-check install smoke lint qt-lint run agent icon
+.PHONY: all configure build clean check cask-check signing-check bundle-check install smoke lint qt-lint run agent icon
 
 all: build
 
@@ -83,7 +83,10 @@ cask-check:
 signing-check:
 	ruby tests/release-signing-smoke.rb .github/workflows/build-macos.yml
 
-check: cask-check signing-check smoke lint qt-lint
+bundle-check:
+	ruby tests/bundle-packaging-smoke.rb packaging/Info.plist.in
+
+check: cask-check signing-check bundle-check smoke lint qt-lint
 
 clean:
 	@if test -d "$(BUILD_DIR)"; then \
