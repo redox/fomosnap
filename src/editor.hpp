@@ -107,6 +107,7 @@ protected:
   bool eventFilter(QObject *watched, QEvent *event) override;
   void keyPressEvent(QKeyEvent *event) override;
   void keyReleaseEvent(QKeyEvent *event) override;
+  void leaveEvent(QEvent *event) override;
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseDoubleClickEvent(QMouseEvent *event) override;
   void mousePressEvent(QMouseEvent *event) override;
@@ -135,6 +136,7 @@ public:
 private:
   enum class Phase { Select, Export, Edit };
   enum class OutputMode { Copy, Save, Both };
+  enum class HighlighterMode { Snap, Normal };
 public:
   enum class Interaction {
     None,
@@ -274,6 +276,16 @@ public:
   }
   /// Current status line. Test accessor.
   [[nodiscard]] QString statusForTest() const { return status_; }
+  /// Text-height I-beam in annotation coordinates, or an empty rect when the
+  /// Snap highlighter has no text row near the pointer. Test accessor.
+  [[nodiscard]] QRectF highlighterPreviewRectForTest() const;
+  /// Whether the highlighter is in its default text-row snapping mode.
+  [[nodiscard]] bool highlighterSnapModeForTest() const {
+    return highlighterMode_ == HighlighterMode::Snap;
+  }
+  /// Active highlighter button geometry. Test accessor for repeated-tool
+  /// behavior without duplicating the responsive toolbar layout.
+  [[nodiscard]] QRectF highlighterToolbarRectForTest() const;
   /// Whether the selection chrome is currently stepped back for an adjustment.
   /// Test accessor.
   [[nodiscard]] bool selectionFadedForTest() const {
@@ -347,6 +359,9 @@ private:
   /// What the armed tool is currently set to, for the status line: shown on
   /// arming so its options are discoverable without trying them.
   [[nodiscard]] QString toolStatus() const;
+  [[nodiscard]] QString highlighterStatus() const;
+  [[nodiscard]] QString highlighterTooltip() const;
+  void activateHighlighter();
   [[nodiscard]] int annotationAt(const QPointF &point) const;
   /// Whether the armed tool picks a layer up rather than working over it.
   /// Moves a layer to the top of the stack, remapping every index that
@@ -603,6 +618,20 @@ private:
   bool resizeConstraintActive_ = false;
   Interaction interaction_ = Interaction::None;
   QVector<QPointF> freehandPoints_;
+  struct HighlighterLock {
+    qreal centerY = 0.0;
+    qreal annotationSize = 0.0;
+  };
+  [[nodiscard]] std::optional<HighlighterLock>
+  highlighterLockAt(const QPointF &annotationPoint) const;
+  /// Set when a highlighter drag begins near a detected screenshot text row.
+  /// Coordinates and size are selection-relative logical pixels, so the lock
+  /// survives view zoom and native/fractional monitor scaling.
+  std::optional<HighlighterLock> highlighterLock_;
+  /// Detected row supplying the Snap cursor's height. Before mouse-down its
+  /// center follows the pointer; during a locked drag it follows the row.
+  std::optional<HighlighterLock> highlighterPreview_;
+  HighlighterMode highlighterMode_ = HighlighterMode::Snap;
   // Cut tool live-drag state. cutDragStart_/cutBandLo_/cutBandHi_ and
   // liveCut_.orientation are in annotation space (selection-relative logical
   // px); the source stays untouched while a shaded removal band previews the
