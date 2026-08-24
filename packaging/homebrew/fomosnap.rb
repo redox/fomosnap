@@ -6,8 +6,8 @@
 class Fomosnap < Formula
   desc "Native macOS screenshot and annotation overlay, ported from Omasnap"
   homepage "https://github.com/redox/fomosnap"
-  url "https://github.com/redox/fomosnap/archive/refs/tags/v2.0.1.tar.gz"
-  sha256 "8aaaafe56b37ec091b302a7a8c260968555eab9b9fb1663a5ac73f4a92d49e5c"
+  url "https://github.com/redox/fomosnap/archive/refs/tags/v2.0.2.tar.gz"
+  sha256 "959f043b4dc9196439b38bd64cf2384c3c9171a75557ba7d54fcd40f9a3dcff1"
   license "MIT"
   head "https://github.com/redox/fomosnap.git", branch: "main"
 
