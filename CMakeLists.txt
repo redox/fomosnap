@@ -63,6 +63,8 @@ add_library(fomosnap-core STATIC
   src/scroll-inject.hpp
   src/stitch.cpp
   src/stitch.hpp
+  src/text-band.cpp
+  src/text-band.hpp
   src/auto-capture.cpp
   src/auto-capture.hpp
   src/startup-timing.cpp

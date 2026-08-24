@@ -27,10 +27,12 @@ global hotkey were rewritten against macOS frameworks.
 - Window capture is a crop of the display frame. Overlapping windows stay
   visible; there is no second clean-window recapture.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
-- Arrows, straight lines, smoothed freehand strokes, translucent highlighter strokes,
-  hollow or filled rectangles (optionally rounded) and ellipses, numbered markers,
-  editable text in Neucha, JetBrains Mono, or Inter Display (on a readability pill),
-  and secure redaction with opaque or randomized non-spatial mosaic output.
+- Arrows, straight lines, smoothed freehand strokes, and translucent highlighter
+  strokes that automatically match and stay straight across screenshot text (with
+  freehand fallback), plus hollow or filled rectangles (optionally rounded) and
+  ellipses, numbered markers, editable text in Neucha, JetBrains Mono, or Inter
+  Display (plain, outlined, or on a readability pill), and secure redaction with
+  opaque or randomized non-spatial mosaic output.
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
   one-click whole-image or drag-region OCR (the recognized text is shown beside
   the image and copied to the clipboard),
@@ -436,6 +438,7 @@ without reaching for the pointer.
 | `S` | Spotlight/loupe; press again to cycle ellipse, rectangle, rounded |
 | `L` | Straight line |
 | `F` | Freehand stroke |
+| `H` | Highlighter; Snap mode uses a mouse-following I-beam at the nearby text height, then locks the drag straight to that row. Press `H` again (or click the active toolbar button) for Normal freehand mode, where wheel or `Alt`+wheel changes thickness; Snap keeps detected-row height automatic and wheel sets only its off-text fallback |
 | `I` | Eyedropper in the color popover · sample the image as the custom color |
 | `C` | Numbered marker |
 | `R` | Rectangle; hover the shape button for rectangle, ellipse, and fill controls; `Alt`+wheel rounds corners |

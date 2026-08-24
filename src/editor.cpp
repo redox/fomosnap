@@ -13,6 +13,7 @@
 #include "recent-snaps.hpp"
 #include "scroll-capture.hpp"
 #include "startup-timing.hpp"
+#include "text-band.hpp"
 
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -89,6 +90,54 @@ constexpr qreal kToolbarGroupGap = 10;
 constexpr qreal kMinimumRedactionExtent = 5.0;
 constexpr int kBackdropDim = 143;
 constexpr int kPointerSyncMs = 16;
+
+qreal highlighterPreviewHeight(qreal annotationSize) {
+  return std::max<qreal>(6.0, annotationSize * 3.0);
+}
+
+QRectF highlighterIBeamBounds(const QPointF &center, qreal height,
+                              qreal scale) {
+  const qreal safeScale = std::max<qreal>(scale, 0.01);
+  const qreal serifHalfWidth =
+      std::clamp(height * 0.18, 5.0 / safeScale, 9.0 / safeScale);
+  return {center.x() - serifHalfWidth, center.y() - height / 2.0,
+          serifHalfWidth * 2.0, height};
+}
+
+void paintHighlighterIBeam(QPainter &painter, const QPointF &center,
+                           qreal height, qreal scale) {
+  const qreal safeScale = std::max<qreal>(scale, 0.01);
+  const QRectF bounds = highlighterIBeamBounds(center, height, safeScale);
+  const qreal spineHalfWidth = 1.5 / safeScale;
+  const qreal serifHeight = std::min(
+      height / 2.0,
+      std::clamp(height * 0.08, 2.0 / safeScale, 4.0 / safeScale));
+  const qreal innerTop = bounds.top() + serifHeight;
+  const qreal innerBottom = bounds.bottom() - serifHeight;
+
+  QPainterPath beam;
+  beam.moveTo(bounds.topLeft());
+  beam.lineTo(bounds.topRight());
+  beam.lineTo(bounds.right(), innerTop);
+  beam.lineTo(center.x() + spineHalfWidth, innerTop);
+  beam.lineTo(center.x() + spineHalfWidth, innerBottom);
+  beam.lineTo(bounds.right(), innerBottom);
+  beam.lineTo(bounds.bottomRight());
+  beam.lineTo(bounds.bottomLeft());
+  beam.lineTo(bounds.left(), innerBottom);
+  beam.lineTo(center.x() - spineHalfWidth, innerBottom);
+  beam.lineTo(center.x() - spineHalfWidth, innerTop);
+  beam.lineTo(bounds.left(), innerTop);
+  beam.closeSubpath();
+
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  painter.setBrush(QColor(255, 255, 255, 242));
+  painter.setPen(QPen(QColor(0, 0, 0, 217), 1.6 / safeScale,
+                      Qt::SolidLine, Qt::SquareCap, Qt::MiterJoin));
+  painter.drawPath(beam);
+  painter.restore();
+}
 
 /// Beside the snapshots and the instance lock, in the private runtime dir.
 /// Session scratch, not configuration: gone at reboot, and a region only
@@ -1218,6 +1267,41 @@ void CaptureEditor::applyBoxResize(Annotation &annotation, Interaction handle,
   annotation.end = box.bottomRight();
 }
 
+QString CaptureEditor::highlighterStatus() const {
+  if (highlighterMode_ == HighlighterMode::Snap) {
+    return QStringLiteral("Highlighter · Snap · text height automatic · wheel "
+                          "sets off-text size %1 · H toggles Normal")
+        .arg(qRound(annotationSize_));
+  }
+  return QStringLiteral("Highlighter · Normal · freehand size %1 · wheel / "
+                        "Alt+wheel resizes · H toggles Snap")
+      .arg(qRound(annotationSize_));
+}
+
+QString CaptureEditor::highlighterTooltip() const {
+  if (highlighterMode_ == HighlighterMode::Snap) {
+    return QStringLiteral("Highlighter · Snap · text height automatic · wheel "
+                          "sets off-text size %1 · H / click again: Normal")
+        .arg(qRound(annotationSize_));
+  }
+  return QStringLiteral("Highlighter · Normal · freehand · size %1 · wheel / "
+                        "Alt+wheel · H / click again: Snap")
+      .arg(qRound(annotationSize_));
+}
+
+void CaptureEditor::activateHighlighter() {
+  if (tool_ == Tool::Highlighter) {
+    highlighterMode_ = highlighterMode_ == HighlighterMode::Snap
+                           ? HighlighterMode::Normal
+                           : HighlighterMode::Snap;
+  } else {
+    tool_ = Tool::Highlighter;
+  }
+  highlighterLock_.reset();
+  highlighterPreview_.reset();
+  setStatus(highlighterStatus());
+}
+
 QString CaptureEditor::toolStatus() const {
   const int size = qRound(annotationSize_);
   switch (tool_) {
@@ -1270,10 +1354,11 @@ QString CaptureEditor::toolStatus() const {
         .arg(size);
   case Tool::Cut:
     return QStringLiteral("Cut · drag a band to remove it");
+  case Tool::Highlighter:
+    return highlighterStatus();
   case Tool::Arrow:
   case Tool::Line:
   case Tool::Freehand:
-  case Tool::Highlighter:
     break;
   }
   const QString name = tool_ == Tool::Arrow      ? QStringLiteral("Arrow")
@@ -1971,6 +2056,54 @@ QPointF CaptureEditor::sourcePoint(const QPointF &logicalPoint) const {
   return sourceRect(QRectF(logicalPoint, QSizeF())).topLeft();
 }
 
+std::optional<CaptureEditor::HighlighterLock>
+CaptureEditor::highlighterLockAt(const QPointF &annotationPoint) const {
+  if (capture_.source.isNull() || capture_.previewSize.isEmpty() ||
+      !QRectF(QPointF(), selection_.size()).contains(annotationPoint))
+    return std::nullopt;
+
+  const QSizeF sourceScale(
+      capture_.source.width() /
+          static_cast<qreal>(capture_.previewSize.width()),
+      capture_.source.height() /
+          static_cast<qreal>(capture_.previewSize.height()));
+  const QPointF logicalPoint = selection_.topLeft() + annotationPoint;
+  const auto band =
+      detectTextBand(capture_.source, sourcePoint(logicalPoint), sourceScale);
+  if (!band)
+    return std::nullopt;
+
+  // Match the text-band padding used for the committed stroke. Keeping this
+  // in one helper makes the hover I-beam and mouse-down lock identical.
+  constexpr qreal padPerSide = 0.05;
+  const qreal centerY =
+      band->center() / sourceScale.height() - selection_.top();
+  const qreal highlightedHeight =
+      band->height() * (1.0 + 2.0 * padPerSide) / sourceScale.height();
+  return HighlighterLock{std::clamp(centerY, 0.0, selection_.height()),
+                         highlightedHeight / 3.0};
+}
+
+QRectF CaptureEditor::highlighterPreviewRectForTest() const {
+  if (!highlighterPreview_)
+    return {};
+  const qreal height =
+      highlighterPreviewHeight(highlighterPreview_->annotationSize);
+  const QPointF pointer = toAnnotationPoint(cursor_);
+  const QPointF center(pointer.x(), dragging_ && highlighterLock_
+                                        ? highlighterPreview_->centerY
+                                        : pointer.y());
+  return highlighterIBeamBounds(center, height, editScale());
+}
+
+QRectF CaptureEditor::highlighterToolbarRectForTest() const {
+  for (const ToolbarButton &button : toolbarButtons()) {
+    if (button.action == QStringLiteral("tool-highlighter"))
+      return button.rect;
+  }
+  return {};
+}
+
 QRectF CaptureEditor::mapWidgetToPreview(const QRectF &widgetRect) const {
   const QSize widget = size();
   const QSize preview = capture_.previewSize;
@@ -2117,9 +2250,7 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
   add(36, QStringLiteral("tool-freehand"), {},
       QStringLiteral("Freehand · F · Size %1 · Wheel")
           .arg(qRound(annotationSize_)));
-  add(36, QStringLiteral("tool-highlighter"), {},
-      QStringLiteral("Highlighter · H · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
+  add(36, QStringLiteral("tool-highlighter"), {}, highlighterTooltip());
   add(36, QStringLiteral("tool-marker"), {},
       QStringLiteral("Number marker · C · Size %1 · Wheel")
           .arg(qRound(annotationSize_)));
@@ -2239,6 +2370,7 @@ void CaptureEditor::applyEditState(const EditState &state) {
   editingAnnotation_ = -1;
   interaction_ = Interaction::None;
   freehandPoints_.clear();
+  highlighterLock_.reset();
   if (textEditor_) {
     textEditor_->clear();
     textEditor_->hide();
@@ -2260,6 +2392,7 @@ void CaptureEditor::cancelActiveDragForHistory() {
   dragStartStateValid_ = false;
   dragChanged_ = false;
   freehandPoints_.clear();
+  highlighterLock_.reset();
   if (cutDragActive_) {
     cutDragActive_ = false;
     refreshComposedCapture();
@@ -2756,6 +2889,7 @@ void CaptureEditor::handleEscape() {
   colorPaletteOpen_ = false;
   customColorPickerOpen_ = false;
   freehandPoints_.clear();
+  highlighterLock_.reset();
   tool_ = Tool::Select;
   setStatus(QStringLiteral("Select/move · Esc again to close"));
   setFocus(Qt::OtherFocusReason);
@@ -3223,7 +3357,7 @@ void CaptureEditor::handleToolbar(const QString &action) {
   else if (action == QStringLiteral("tool-freehand"))
     tool_ = Tool::Freehand;
   else if (action == QStringLiteral("tool-highlighter"))
-    tool_ = Tool::Highlighter;
+    activateHighlighter();
   else if (action == QStringLiteral("tool-marker"))
     tool_ = Tool::Marker;
   else if (action == QStringLiteral("tool-rectangle") ||
@@ -3574,7 +3708,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   } else if (event->key() == Qt::Key_F) {
     tool_ = Tool::Freehand;
   } else if (event->key() == Qt::Key_H) {
-    tool_ = Tool::Highlighter;
+    activateHighlighter();
   } else if (event->key() == Qt::Key_C || event->key() == Qt::Key_M) {
     tool_ = Tool::Marker;
   } else if (event->key() == Qt::Key_R || event->key() == Qt::Key_E) {
@@ -3703,6 +3837,12 @@ void CaptureEditor::keyReleaseEvent(QKeyEvent *event) {
     return;
   }
   QWidget::keyReleaseEvent(event);
+}
+
+void CaptureEditor::leaveEvent(QEvent *event) {
+  highlighterPreview_.reset();
+  QWidget::leaveEvent(event);
+  update();
 }
 
 void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
@@ -3921,7 +4061,9 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
     }
     if ((tool_ == Tool::Freehand || tool_ == Tool::Highlighter) && dragging_ &&
         interaction_ == Interaction::None) {
-      const QPointF point = toAnnotationPoint(cursor_);
+      QPointF point = toAnnotationPoint(cursor_);
+      if (tool_ == Tool::Highlighter && highlighterLock_)
+        point.setY(highlighterLock_->centerY);
       if (freehandPoints_.isEmpty() ||
           QLineF(freehandPoints_.last(), point).length() >= 1.5)
         freehandPoints_.push_back(point);
@@ -4350,7 +4492,16 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     if (tool_ == Tool::Freehand || tool_ == Tool::Highlighter) {
       freehandPoints_.clear();
       freehandPoints_.reserve(256);
-      freehandPoints_.push_back(point);
+      highlighterLock_.reset();
+      QPointF strokeStart = point;
+      if (tool_ == Tool::Highlighter &&
+          highlighterMode_ == HighlighterMode::Snap)
+        highlighterLock_ = highlighterLockAt(point);
+      if (highlighterLock_)
+        strokeStart.setY(highlighterLock_->centerY);
+      freehandPoints_.push_back(strokeStart);
+      if (tool_ == Tool::Highlighter)
+        updatePointerCursor();
     }
   }
   update();
@@ -4492,7 +4643,9 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
 
   const QLineF span = creationSpan(toAnnotationPoint(event->position()));
   const QPointF start = span.p1();
-  const QPointF end = span.p2();
+  QPointF end = span.p2();
+  if (tool_ == Tool::Highlighter && highlighterLock_)
+    end.setY(highlighterLock_->centerY);
   creationConstraintActive_ = false;
   creationCenteredActive_ = false;
   if (tool_ == Tool::Freehand || tool_ == Tool::Highlighter) {
@@ -4511,16 +4664,18 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       annotation.start = freehandPoints_.first();
       annotation.end = freehandPoints_.last();
       annotation.color = annotationColor();
-      annotation.size = annotationSize_;
+      annotation.size = highlighter && highlighterLock_
+                            ? highlighterLock_->annotationSize
+                            : annotationSize_;
       annotation.points = std::move(freehandPoints_);
       selectedAnnotation_ = -1;
-      setStatus(
-          highlighter
-              ? QStringLiteral("Highlight added · Esc for select mode")
-              : QStringLiteral("Stroke added · Esc for select mode"));
+      setStatus(highlighter ? highlighterStatus()
+                            : QStringLiteral("Stroke added · Esc for select "
+                                             "mode"));
       commitAnnotate(std::move(annotation));
     }
     freehandPoints_.clear();
+    highlighterLock_.reset();
     dragging_ = false;
     updatePointerCursor();
     update();
@@ -4756,8 +4911,10 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
              tool_ == Tool::Marker || tool_ == Tool::Rectangle ||
              tool_ == Tool::Ellipse) {
     annotationSize_ = std::clamp(annotationSize_ + step, 2.0, 12.0);
-    setStatus(QStringLiteral("Size %1 · mouse wheel changes size")
-                  .arg(qRound(annotationSize_)));
+    setStatus(tool_ == Tool::Highlighter
+                  ? highlighterStatus()
+                  : QStringLiteral("Size %1 · mouse wheel changes size")
+                        .arg(qRound(annotationSize_)));
   } else {
     QWidget::wheelEvent(event);
     return;
@@ -4767,6 +4924,7 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
 }
 
 void CaptureEditor::updatePointerCursor() {
+  highlighterPreview_.reset();
   if (phase_ == Phase::Export) {
     setCursor(Qt::WaitCursor);
     return;
@@ -4833,6 +4991,18 @@ void CaptureEditor::updatePointerCursor() {
     setCursor(Qt::IBeamCursor);
   else if (tool_ == Tool::Cut)
     setCursor(Qt::CrossCursor);
+  else if (tool_ == Tool::Highlighter) {
+    if (highlighterMode_ == HighlighterMode::Snap) {
+      highlighterPreview_ =
+          dragging_ ? highlighterLock_
+                    : editImageRect().contains(cursor_)
+                          ? highlighterLockAt(toAnnotationPoint(cursor_))
+                          : std::nullopt;
+    }
+    // Qt's stock I-beam has a fixed text-editor height. Paint the measured
+    // one ourselves so its serifs span exactly the row the stroke will lock.
+    setCursor(highlighterPreview_ ? Qt::BlankCursor : Qt::CrossCursor);
+  }
   else
     setCursor(Qt::CrossCursor);
 }
@@ -5737,10 +5907,12 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     preview.color = tool_ == Tool::Ocr ? QColor(Qt::white) : annotationColor();
     if (tool_ == Tool::Text)
       preview.color.setAlpha(150);
-    preview.size = tool_ == Tool::Ocr          ? 2.0
+    preview.size = tool_ == Tool::Ocr         ? 2.0
                    : tool_ == Tool::Text      ? 1.0
                    : tool_ == Tool::Spotlight ? spotlightBorder_
-                                              : annotationSize_;
+                   : tool_ == Tool::Highlighter && highlighterLock_
+                       ? highlighterLock_->annotationSize
+                       : annotationSize_;
     defaultAnnotations.push_back(std::move(preview));
   } else if (tool_ == Tool::Marker && image.contains(cursor_) && !dragging_ &&
              !pointerGrabsLayer()) {
@@ -5766,6 +5938,16 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       paintAnnotation(painter, annotation);
   }
   painter.restore();
+  if (highlighterPreview_) {
+    const qreal height =
+        highlighterPreviewHeight(highlighterPreview_->annotationSize);
+    const QPointF pointer = toAnnotationPoint(cursor_);
+    paintHighlighterIBeam(
+        painter, QPointF(pointer.x(), dragging_ && highlighterLock_
+                                          ? highlighterPreview_->centerY
+                                          : pointer.y()),
+        height, editScale());
+  }
   if (tool_ == Tool::Select && marqueeSelecting_ &&
       !marqueeRect_.isEmpty()) {
     const qreal scale = std::max<qreal>(editScale(), 0.01);
@@ -6129,6 +6311,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         } else if (tool_ == Tool::Redact) {
           tooltip = QStringLiteral("Redact · %1 · D toggles style")
                         .arg(redactionStyleName(redactionStyle_));
+        } else if (tool_ == Tool::Highlighter) {
+          tooltip = highlighterTooltip();
         } else if (tool_ == Tool::Rectangle) {
           tooltip = QStringLiteral("Rectangle · %1 · Size %2 · Scroll wheel · "
                                    "Alt+Wheel %3")

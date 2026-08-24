@@ -16,6 +16,7 @@
 #include "pin-lifecycle-smoke.hpp"
 #include "capture-probe-smoke.hpp"
 #include "session-exit-smoke.hpp"
+#include "text-band.hpp"
 #include "eyedropper.hpp"
 
 #include <QApplication>
@@ -45,6 +46,7 @@
 #include <array>
 #include <cmath>
 #include <csignal>
+#include <limits>
 #include <numbers>
 #include <optional>
 #include <sys/resource.h>
@@ -570,6 +572,292 @@ bool runHighlighterRenderingCheck(QString &error) {
     error = QStringLiteral("Highlighter stroke was not translucent/wide");
     return false;
   }
+  return true;
+}
+
+void paintTextLikeBand(QImage &image, const QRectF &logicalBand, qreal scale,
+                       const QColor &ink) {
+  QPainter painter(&image);
+  painter.setRenderHint(QPainter::Antialiasing, false);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(ink);
+  for (int glyph = 0; glyph < 11; ++glyph) {
+    const qreal topInset = glyph % 4 == 0 ? 0.0 : 2.0;
+    const qreal bottomInset = glyph % 3 == 0 ? 0.0 : 1.0;
+    const QRectF stem(logicalBand.left() + glyph * 13.0,
+                      logicalBand.top() + topInset, 6.0,
+                      logicalBand.height() - topInset - bottomInset);
+    painter.drawRect(QRectF(stem.topLeft() * scale, stem.size() * scale));
+  }
+}
+
+/** Local edge scan finds text height across themes and native image scales. */
+bool runTextBandDetectionCheck(QString &error) {
+  for (const qreal scale : {1.0, 2.0}) {
+    const QSize logicalSize(360, 180);
+    QImage image((QSizeF(logicalSize) * scale).toSize(), QImage::Format_RGB32);
+    image.fill(QColor(QStringLiteral("#515862")));
+    {
+      // Two surfaces in the same scan row exercise the edge-density approach:
+      // there is deliberately no single row-wide background color.
+      QPainter painter(&image);
+      painter.fillRect(
+          QRectF(QPointF(180 * scale, 0), QSizeF(180, 180) * scale),
+          QColor(QStringLiteral("#606772")));
+    }
+    const QRectF expected(82, 66, 149, 16);
+    paintTextLikeBand(image, expected, scale,
+                      QColor(QStringLiteral("#737b86")));
+
+    // The pointer may sit just under the glyphs: a highlighter should still
+    // choose the nearby row, but report its native-pixel extent.
+    const auto band =
+        detectTextBand(image, QPointF(130, 89) * scale, QSizeF(scale, scale));
+    if (!band ||
+        std::abs(band->center() / scale - expected.center().y()) > 3.0 ||
+        band->height() / scale < 10.0 || band->height() / scale > 20.0) {
+      error = QStringLiteral("Text-band detector missed a %1x mixed-background "
+                             "text row")
+                  .arg(scale);
+      return false;
+    }
+
+    // Bowl-shaped glyphs can produce distinct upper/lower edge runs with a
+    // quiet five-row middle. They are one text line, not two undersized bands.
+    QImage split((QSizeF(logicalSize) * scale).toSize(), QImage::Format_RGB32);
+    split.fill(QColor(QStringLiteral("#252a31")));
+    {
+      QPainter painter(&split);
+      painter.setRenderHint(QPainter::Antialiasing, false);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(QColor(QStringLiteral("#d8dbe2")));
+      for (int glyph = 0; glyph < 11; ++glyph) {
+        const qreal x = (82.0 + glyph * 13.0) * scale;
+        painter.drawRect(QRectF(x, 60.0 * scale, 6.0 * scale, 4.0 * scale));
+        painter.drawRect(QRectF(x, 69.0 * scale, 6.0 * scale, 5.0 * scale));
+      }
+    }
+    const auto splitBand =
+        detectTextBand(split, QPointF(130, 72) * scale, QSizeF(scale, scale));
+    if (!splitBand || splitBand->height() / scale < 12.0 ||
+        std::abs(splitBand->center() / scale - 67.0) > 3.0) {
+      error = QStringLiteral(
+                  "Text-band detector fragmented split glyphs at %1x")
+                  .arg(scale);
+      return false;
+    }
+  }
+
+  QImage flat(320, 160, QImage::Format_RGB32);
+  flat.fill(QColor(QStringLiteral("#e6e4dd")));
+  if (detectTextBand(flat, QPointF(120, 80)) ||
+      detectTextBand(flat, QPointF(319.9, 159.9))) {
+    error = QStringLiteral("Text-band detector snapped on a flat background");
+    return false;
+  }
+  return true;
+}
+
+/** The editor locks a detected text highlight and preserves freehand fallback. */
+bool runTextAwareHighlighterEditorCheck(QApplication &application,
+                                        QString &error) {
+  constexpr qreal sourceScale = 2.0;
+  const QSize logicalSize(400, 240);
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = QRect(QPoint(), logicalSize);
+  capture.monitor.pixelSize = (QSizeF(logicalSize) * sourceScale).toSize();
+  capture.monitor.scale = sourceScale;
+  capture.previewSize = logicalSize;
+  capture.source = QImage(capture.monitor.pixelSize, QImage::Format_RGB32);
+  capture.source.fill(QColor(QStringLiteral("#20242c")));
+  const QRectF textBand(80, 96, 149, 16);
+  paintTextLikeBand(capture.source, textBand, sourceScale,
+                    QColor(QStringLiteral("#d8dbe2")));
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::Fullscreen);
+  editor.setSuppressSnapshots(true);
+  // baseImageRect is exactly 400x240 at (30,135), making test gestures map
+  // 1:1 to annotation coordinates while leaving the toolbar clear of the
+  // capture tabs. The source itself remains 2x HiDPI.
+  editor.resize(460, 500);
+  editor.show();
+  application.processEvents();
+  const auto widgetPoint = [&editor](qreal x, qreal y) {
+    return editor.toScreenPointForTest(QPointF(x, y)).toPoint();
+  };
+
+  QTest::keyClick(&editor, Qt::Key_H);
+  application.processEvents();
+  if (!editor.highlighterSnapModeForTest() ||
+      !editor.statusForTest().contains(QStringLiteral("Snap")) ||
+      !editor.statusForTest().contains(QStringLiteral("automatic"))) {
+    error = QStringLiteral("Highlighter did not start in disclosed Snap mode");
+    return false;
+  }
+  // Hovering a detected row replaces the fixed crosshair with a measured
+  // I-beam. The detected row supplies only its height: the beam itself follows
+  // the pointer fluidly until mouse-down commits to a row.
+  QTest::mouseMove(&editor, widgetPoint(105, 114), 10);
+  application.processEvents();
+  const QRectF firstBeam = editor.highlighterPreviewRectForTest();
+  QTest::mouseMove(&editor, widgetPoint(105, 120), 10);
+  application.processEvents();
+  const QRectF beam = editor.highlighterPreviewRectForTest();
+  const QImage hovered = editor.grab().toImage();
+  const QPoint beamCenter = widgetPoint(beam.center().x(), beam.center().y());
+  if (firstBeam.isEmpty() || beam.isEmpty() ||
+      editor.cursor().shape() != Qt::BlankCursor ||
+      std::abs(firstBeam.center().y() - 114.0) > 0.6 ||
+      std::abs(beam.center().y() - 120.0) > 0.6 ||
+      std::abs(beam.height() - firstBeam.height()) > 0.01 ||
+      beam.height() < 12.0 || beam.height() > 22.0 ||
+      !hovered.rect().contains(beamCenter) ||
+      hovered.pixelColor(beamCenter).lightness() < 180) {
+    error = QStringLiteral(
+        "Snap highlighter preview did not follow the mouse at detected height");
+    return false;
+  }
+  QTest::mouseMove(&editor, widgetPoint(70, 180), 10);
+  application.processEvents();
+  if (!editor.highlighterPreviewRectForTest().isEmpty() ||
+      editor.cursor().shape() != Qt::CrossCursor) {
+    error = QStringLiteral("Highlighter I-beam did not fall back off text");
+    return false;
+  }
+  QTest::mouseMove(&editor, widgetPoint(105, 118), 10);
+  application.processEvents();
+
+  // Start just below the glyph box, then deliberately wobble far above and
+  // below it. Every recorded point should remain on the detected centerline.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                    widgetPoint(105, 118));
+  QTest::mouseMove(&editor, widgetPoint(190, 145), 10);
+  QTest::mouseMove(&editor, widgetPoint(270, 75), 10);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      widgetPoint(325, 135));
+  application.processEvents();
+  if (editor.operationLog().isEmpty() ||
+      editor.operationLog().constLast().annotations.size() != 1) {
+    error = QStringLiteral("Text-aware highlighter did not commit a layer");
+    return false;
+  }
+  const Annotation locked =
+      editor.operationLog().constLast().annotations.constFirst();
+  qreal minimumY = std::numeric_limits<qreal>::max();
+  qreal maximumY = std::numeric_limits<qreal>::lowest();
+  for (const QPointF &point : locked.points) {
+    minimumY = std::min(minimumY, point.y());
+    maximumY = std::max(maximumY, point.y());
+  }
+  const qreal lockedWidth = std::max<qreal>(6.0, locked.size * 3.0);
+  if (locked.kind != Annotation::Kind::Highlighter ||
+      locked.points.size() < 3 || maximumY - minimumY > 0.01 ||
+      std::abs(minimumY - textBand.center().y()) > 3.0 || lockedWidth < 12.0 ||
+      lockedWidth > 22.0) {
+    error = QStringLiteral("Detected highlight did not stay straight at the "
+                           "text height");
+    return false;
+  }
+
+  // The same geometry must reach the native-resolution renderer: ink covers
+  // the measured row, but not background several pixels beyond its edge.
+  const QImage rendered = editor.renderCurrentOutput();
+  const int nativeX = qRound(260 * sourceScale);
+  const int nativeCenter = qRound(minimumY * sourceScale);
+  const int nativeOutside =
+      qRound((minimumY + lockedWidth / 2.0 + 4.0) * sourceScale);
+  if (rendered.isNull() ||
+      rendered.pixelColor(nativeX, nativeCenter) ==
+          capture.source.pixelColor(nativeX, nativeCenter) ||
+      rendered.pixelColor(nativeX, nativeOutside) !=
+          capture.source.pixelColor(nativeX, nativeOutside)) {
+    error = QStringLiteral("Text-height highlight did not render at its locked "
+                           "native-pixel width");
+    return false;
+  }
+
+  // Repeating H switches the active tool to Normal: text scanning and its
+  // I-beam are both gone, and Alt+wheel changes the freehand thickness.
+  QTest::keyClick(&editor, Qt::Key_H);
+  QTest::mouseMove(&editor, widgetPoint(105, 118), 10);
+  application.processEvents();
+  if (editor.highlighterSnapModeForTest() ||
+      !editor.statusForTest().contains(QStringLiteral("Normal")) ||
+      !editor.statusForTest().contains(QStringLiteral("Alt+wheel")) ||
+      !editor.highlighterPreviewRectForTest().isEmpty() ||
+      editor.cursor().shape() != Qt::CrossCursor) {
+    error = QStringLiteral("Repeated H did not arm disclosed Normal mode");
+    return false;
+  }
+  {
+    const QPointF wheelPoint(widgetPoint(105, 118));
+    QWheelEvent wheel(wheelPoint, wheelPoint, {}, {0, 120}, Qt::NoButton,
+                      Qt::AltModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&editor, &wheel);
+    application.processEvents();
+  }
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                    widgetPoint(45, 118));
+  QTest::mouseMove(&editor, widgetPoint(55, 145), 10);
+  QTest::mouseMove(&editor, widgetPoint(65, 75), 10);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      widgetPoint(75, 135));
+  application.processEvents();
+  const Annotation normal =
+      editor.operationLog().constLast().annotations.constFirst();
+  minimumY = std::numeric_limits<qreal>::max();
+  maximumY = std::numeric_limits<qreal>::lowest();
+  for (const QPointF &point : normal.points) {
+    minimumY = std::min(minimumY, point.y());
+    maximumY = std::max(maximumY, point.y());
+  }
+  if (normal.kind != Annotation::Kind::Highlighter ||
+      maximumY - minimumY < 40.0 || !qFuzzyCompare(normal.size, 5.0) ||
+      !editor.statusForTest().contains(QStringLiteral("Normal"))) {
+    error = QStringLiteral(
+        "Normal highlighter detected a row or ignored Alt+wheel thickness");
+    return false;
+  }
+
+  // Clicking the already-active toolbar tool follows the same repeated-tool
+  // convention and returns to Snap.
+  const QRectF highlighterButton = editor.highlighterToolbarRectForTest();
+  if (highlighterButton.isEmpty()) {
+    error = QStringLiteral("Highlighter toolbar button was unavailable");
+    return false;
+  }
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    highlighterButton.center().toPoint());
+  application.processEvents();
+  if (!editor.highlighterSnapModeForTest() ||
+      !editor.statusForTest().contains(QStringLiteral("Snap"))) {
+    error = QStringLiteral("Active toolbar click did not return H to Snap");
+    return false;
+  }
+
+  // Snap still preserves its freehand fallback away from detected text. The
+  // manual size changed in Normal is retained for such an off-text stroke.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                    widgetPoint(70, 180));
+  QTest::mouseMove(&editor, widgetPoint(140, 211), 10);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      widgetPoint(205, 170));
+  application.processEvents();
+  const Annotation fallback =
+      editor.operationLog().constLast().annotations.constFirst();
+  minimumY = std::numeric_limits<qreal>::max();
+  maximumY = std::numeric_limits<qreal>::lowest();
+  for (const QPointF &point : fallback.points) {
+    minimumY = std::min(minimumY, point.y());
+    maximumY = std::max(maximumY, point.y());
+  }
+  if (fallback.kind != Annotation::Kind::Highlighter ||
+      maximumY - minimumY < 20.0 || !qFuzzyCompare(fallback.size, 5.0)) {
+    error = QStringLiteral("Highlighter lost its freehand no-text fallback");
+    return false;
+  }
+  editor.close();
   return true;
 }
 
@@ -6739,6 +7027,14 @@ int main(int argc, char **argv) {
   if (!runHighlighterRenderingCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 69;
+  }
+  if (!runTextBandDetectionCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 128;
+  }
+  if (!runTextAwareHighlighterEditorCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 129;
   }
   if (!runSecureRedactionChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
