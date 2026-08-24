@@ -688,7 +688,6 @@ private:
   quint64 highlighterProbeGeneration_ = 0;
   QFutureWatcher<HighlighterProbeResult> highlighterProbeWatcher_;
   HighlighterMode highlighterMode_ = HighlighterMode::Snap;
-  stroke::InputSmoother freehandInputSmoother_;
   // Cut tool live-drag state. cutDragStart_/cutBandLo_/cutBandHi_ and
   // liveCut_.orientation are in annotation space (selection-relative logical
   // px); the source stays untouched while a shaded removal band previews the

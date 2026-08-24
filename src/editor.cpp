@@ -4618,12 +4618,9 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       QPointF point = toUnclampedAnnotationPoint(cursor_);
       if (tool_ == Tool::Highlighter && highlighterLock_)
         point.setY(highlighterLock_->centerY);
-      const QPointF filtered = tool_ == Tool::Freehand
-                                   ? freehandInputSmoother_.update(point)
-                                   : point;
       if (freehandPoints_.isEmpty() ||
-          QLineF(freehandPoints_.last(), filtered).length() >= 1.5)
-        freehandPoints_.push_back(filtered);
+          QLineF(freehandPoints_.last(), point).length() >= 1.5)
+        freehandPoints_.push_back(point);
     }
     bool overPaletteAnchor = false;
     bool overCustomAnchor = false;
@@ -5087,8 +5084,6 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
         highlighterLock_ = highlighterPreview_;
       if (highlighterLock_)
         strokeStart.setY(highlighterLock_->centerY);
-      if (tool_ == Tool::Freehand)
-        freehandInputSmoother_.reset();
       freehandPoints_.push_back(strokeStart);
       if (tool_ == Tool::Highlighter)
         updatePointerCursor();
@@ -5274,6 +5269,8 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       if (highlighter) {
         annotation.points = std::move(freehandPoints_);
       } else {
+        // Preserve exact endpoints and raw intermediate samples so level zero
+        // is truly unsmoothed and later level changes never compound.
         annotation.rawPoints = std::move(freehandPoints_);
         annotation.smoothingLevel = freehandSmoothingLevel_;
         annotation.points = stroke::smoothFreehand(annotation.rawPoints,
