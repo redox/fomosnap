@@ -1162,6 +1162,68 @@ bool runSpotlightAndSampleChecks(QString &error) {
   return true;
 }
 
+/** Ctrl+wheel down zooms out below fit, to a 10% floor, and Ctrl+0 comes
+ *  back to fit. */
+bool runZoomOutCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(255, 220, 40));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.setSuppressSnapshots(true);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(650, 470), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 470));
+  application.processEvents();
+
+  const auto ctrlWheel = [&](int deltaY) {
+    QWheelEvent wheel(QPointF(400, 300), QPointF(400, 300), {}, {0, deltaY},
+                      Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
+                      false);
+    QApplication::sendEvent(&editor, &wheel);
+    application.processEvents();
+  };
+  // A point just inside the fitted image's corner is bright yellow at fit
+  // and stops being image once the view zooms out. Probed at the fit rect
+  // measured before any zoom, so the spot is geometry-independent.
+  const QPoint fitCorner =
+      (editor.editImageRectForTest().topLeft() + QPointF(5, 5)).toPoint();
+  const auto cornerIsImage = [&] {
+    const QColor color = editor.grab().toImage().pixelColor(fitCorner);
+    return color.red() > 200 && color.green() > 150 && color.blue() < 120;
+  };
+  if (!cornerIsImage()) {
+    error = QStringLiteral("Zoom fixture corner was not image at fit");
+    return false;
+  }
+  ctrlWheel(-120);
+  if (cornerIsImage()) {
+    error = QStringLiteral("Ctrl+wheel down did not zoom out below fit");
+    return false;
+  }
+  for (int step = 0; step < 30; ++step)
+    ctrlWheel(-120);
+  if (cornerIsImage()) {
+    error = QStringLiteral("Deep zoom out lost the floor");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_0, Qt::ControlModifier);
+  application.processEvents();
+  if (!cornerIsImage()) {
+    error = QStringLiteral("Ctrl+0 did not return to fit from a zoom out");
+    return false;
+  }
+  return true;
+}
+
 /** The draft's native caret is hidden; QPlainTextEdit actually reads cursorWidth. */
 bool runNativeCaretHiddenCheck(QApplication &application, QString &error) {
   CaptureData capture;
@@ -6541,6 +6603,10 @@ int main(int argc, char **argv) {
   if (!runSpotlightAndSampleChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 79;
+  }
+  if (!runZoomOutCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 10;
   }
   if (!runNativeCaretHiddenCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
