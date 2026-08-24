@@ -14,6 +14,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QThread>
 #include <QUuid>
 
 #include <unistd.h>
@@ -151,14 +152,31 @@ void activateApp() { [NSApp activateIgnoringOtherApps:YES]; }
 
 /// Runs launchctl and reports whether it succeeded. Bootout is allowed to fail:
 /// it is also used to clear a job that may not be loaded.
-[[nodiscard]] bool runLaunchctl(const QStringList &arguments) {
+[[nodiscard]] bool runLaunchctl(const QStringList &arguments,
+                                QString *diagnostic = nullptr) {
   if (qEnvironmentVariableIsSet("FOMOSNAP_TEST_NO_LAUNCHCTL"))
     return true;
   QProcess launchctl;
   launchctl.start(QStringLiteral("launchctl"), arguments);
-  if (!launchctl.waitForStarted(5000))
+  if (!launchctl.waitForStarted(5000)) {
+    if (diagnostic)
+      *diagnostic = launchctl.errorString();
     return false;
-  return launchctl.waitForFinished(10000) && launchctl.exitCode() == 0;
+  }
+  if (!launchctl.waitForFinished(10000)) {
+    if (diagnostic)
+      *diagnostic = QStringLiteral("timed out");
+    return false;
+  }
+  if (launchctl.exitCode() == 0)
+    return true;
+  if (diagnostic) {
+    *diagnostic = QString::fromLocal8Bit(launchctl.readAllStandardError());
+    if (diagnostic->trimmed().isEmpty())
+      *diagnostic =
+          QStringLiteral("exited with code %1").arg(launchctl.exitCode());
+  }
+  return false;
 }
 
 bool setLaunchAtLogin(bool enabled, QString &error) {
@@ -230,11 +248,25 @@ bool setLaunchAtLogin(bool enabled, QString &error) {
   // Replace any previous registration, which may point at an older path.
   static_cast<void>(runLaunchctl(
       {QStringLiteral("bootout"), QStringLiteral("%1/%2").arg(domain, label)}));
-  if (!runLaunchctl({QStringLiteral("bootstrap"), domain, plistPath})) {
-    error = QStringLiteral("Could not load the login item (%1)").arg(plistPath);
-    return false;
+  const QStringList bootstrapArguments = {
+      QStringLiteral("bootstrap"), domain, plistPath};
+  QString launchctlError;
+  constexpr int kBootstrapAttempts = 20;
+  for (int attempt = 0; attempt < kBootstrapAttempts; ++attempt) {
+    launchctlError.clear();
+    if (runLaunchctl(bootstrapArguments, &launchctlError))
+      return true;
+    // bootout returns before launchd has necessarily finished terminating the
+    // old process. Retry the replacement while that transient state clears.
+    if (attempt + 1 < kBootstrapAttempts)
+      QThread::msleep(100);
   }
-  return true;
+
+  error = QStringLiteral("Could not load the login item (%1)")
+              .arg(plistPath);
+  if (!launchctlError.trimmed().isEmpty())
+    error += QStringLiteral(": ") + launchctlError.trimmed();
+  return false;
 }
 
 bool launchesAtLogin() { return QFile::exists(agentPlistPath()); }
