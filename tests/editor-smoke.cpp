@@ -3747,6 +3747,151 @@ bool runSpotlightHandleSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Canvas boundary policies clip the presentation, never the stored layer. */
+bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 100, 100};
+  capture.monitor.pixelSize = {100, 100};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(100, 100, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  Annotation outside;
+  outside.kind = Annotation::Kind::Rectangle;
+  outside.start = {50, 40};
+  outside.end = {260, 80};
+  outside.color = QColor(QStringLiteral("#ff375f"));
+  outside.size = 4.0;
+  outside.id = 1;
+
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {outside};
+  OperationLog log;
+  log.ops = {annotate};
+  log.index = 1;
+  log.nextId = 2;
+  log.previewSize = capture.previewSize;
+
+  const QRectF sourceFrame(QPointF(), QSizeF(capture.previewSize));
+  const QRectF growCanvas = captureCanvasRect(
+      sourceFrame.size(), {outside}, CanvasBoundaryMode::Grow);
+  const QRectF frameCanvas = captureCanvasRect(
+      sourceFrame.size(), {outside}, CanvasBoundaryMode::Frame);
+  const QRectF imageCanvas = captureCanvasRect(
+      sourceFrame.size(), {outside}, CanvasBoundaryMode::Image);
+  if (captureCanvasRect(sourceFrame.size(), {outside}) != growCanvas ||
+      growCanvas != QRectF(-64, -64, 327, 228) ||
+      frameCanvas != QRectF(-64, -64, 228, 228) ||
+      imageCanvas != sourceFrame ||
+      captureCanvasRect(sourceFrame.size(), {}, CanvasBoundaryMode::Frame) !=
+          sourceFrame) {
+    error = QStringLiteral("Canvas boundary geometry reached the wrong bounds");
+    return false;
+  }
+
+  const auto expectedOutput = [&](CanvasBoundaryMode mode) {
+    return renderCapture(capture, sourceFrame, {outside},
+                         BackgroundStyle::None, true, mode);
+  };
+  const QImage growOutput = expectedOutput(CanvasBoundaryMode::Grow);
+  const QImage frameOutput = expectedOutput(CanvasBoundaryMode::Frame);
+  const QImage imageOutput = expectedOutput(CanvasBoundaryMode::Image);
+  if (growOutput.size() != growCanvas.size().toSize() ||
+      frameOutput.size() != frameCanvas.size().toSize() ||
+      imageOutput.size() != imageCanvas.size().toSize() ||
+      !(growOutput.width() > frameOutput.width() &&
+        frameOutput.width() > imageOutput.width())) {
+    error = QStringLiteral("Canvas boundary exports were not clipped in order");
+    return false;
+  }
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                       QuickOutputMode::None, log);
+  editor.resize(640, 480);
+  editor.show();
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Grow ||
+      editor.currentCanvasForTest() != growCanvas ||
+      editor.renderCurrentOutput() != growOutput) {
+    error = QStringLiteral("Canvas did not default to Grow");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_G);
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Frame ||
+      editor.currentCanvasForTest() != frameCanvas ||
+      editor.currentAnnotationsForTest() != QVector<Annotation>{outside} ||
+      editor.renderCurrentOutput() != frameOutput ||
+      !editor.statusForTest().contains(QStringLiteral("Canvas: Frame")) ||
+      editor.operationLog().constLast().type !=
+          Operation::Type::CanvasBoundary ||
+      editor.operationLog().constLast().canvasBoundary !=
+          CanvasBoundaryMode::Frame) {
+    error = QStringLiteral("G did not switch non-destructively to Frame");
+    return false;
+  }
+
+  if (!editor.waitForSnapshot() || editor.workingLogPath().isEmpty()) {
+    error = QStringLiteral("Frame boundary was not persisted");
+    return false;
+  }
+  CaptureEditor restored(capture, CaptureEditor::CaptureMode::File);
+  QString restoreError;
+  if (!restored.restoreOperationLog(editor.workingLogPath(), restoreError) ||
+      restored.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Frame ||
+      restored.currentCanvasForTest() != frameCanvas ||
+      restored.currentAnnotationsForTest() != QVector<Annotation>{outside} ||
+      restored.renderCurrentOutput() != frameOutput) {
+    error = QStringLiteral("Restoring Frame changed its layers or clipping: %1")
+                .arg(restoreError);
+    return false;
+  }
+  restored.close();
+
+  QTest::keyClick(&editor, Qt::Key_G);
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Image ||
+      editor.currentCanvasForTest() != imageCanvas ||
+      editor.currentAnnotationsForTest() != QVector<Annotation>{outside} ||
+      editor.renderCurrentOutput() != imageOutput ||
+      !editor.statusForTest().contains(QStringLiteral("Canvas: Image"))) {
+    error = QStringLiteral("G did not switch non-destructively to Image");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_G, Qt::ShiftModifier);
+  QTest::keyClick(&editor, Qt::Key_G, Qt::ShiftModifier);
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Grow ||
+      editor.currentCanvasForTest() != growCanvas ||
+      editor.currentAnnotationsForTest() != QVector<Annotation>{outside} ||
+      editor.renderCurrentOutput() != growOutput) {
+    error = QStringLiteral("Shift+G did not cycle backward to Grow");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Frame ||
+      editor.renderCurrentOutput() != frameOutput) {
+    error = QStringLiteral("Undo did not restore the prior canvas boundary");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  if (editor.currentCanvasBoundaryForTest() != CanvasBoundaryMode::Grow ||
+      editor.renderCurrentOutput() != growOutput) {
+    error = QStringLiteral("Redo did not restore the Grow boundary");
+    return false;
+  }
+
+  editor.close();
+  return true;
+}
+
 /** Runs the interaction and rendering smoke checks. */
 bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   CaptureData capture;
@@ -7673,6 +7818,10 @@ int main(int argc, char **argv) {
   if (!runContinuousAnnotationToolsSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 80;
+  }
+  if (!runCanvasBoundaryModeSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 202;
   }
   if (!runSelectOutsideCanvasSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

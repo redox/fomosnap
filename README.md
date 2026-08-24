@@ -28,6 +28,8 @@ global hotkey were rewritten against macOS frameworks.
   visible; there is no second clean-window recapture.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Draw, type, resize, or carry a layer past the screenshot edge to grow the canvas.
+  Growth is the default; `G` cycles to clipping at the normal frame or at the
+  original image, and `Shift+G` cycles backward without changing layer geometry.
   New strips start in window gray with the original screenshot's card shadow.
   `B` cycles the colorful backdrops plus shadowed and flat window gray; `Shift+B`
   toggles the current shadow directly. Undo/delete can contract grown strips again.
@@ -454,6 +456,7 @@ without reaching for the pointer.
 | `O` | Recognize and copy all text in the current image |
 | `B` | Cycle shadowed colors, then shadowed and flat window gray before returning to blue |
 | `Shift+B` | Toggle the screenshot card's drop shadow; on by default |
+| `G` / `Shift+G` | Cycle canvas boundaries forward/backward: Grow, Frame, Image. Frame clips at the normal background frame; Image clips at the original screenshot edge |
 | `1`–`8` | Set annotation color; `7` is black and `8` is white |
 | Wheel | Scale selected layer, magnify the spotlight under the cursor, or change active tool size (`Alt`+wheel: rectangle corner radius or spotlight border); while just viewing a zoomed capture, scroll it like a document |
 | `Shift`+wheel | Scroll a zoomed capture sideways (a wide stitch); never changes the zoom |
@@ -504,6 +507,10 @@ Image and path copying go to `NSPasteboard`, which owns the data, so it stays
 available after the pin is closed. No font-based symbol set is required; the
 controls use the same vector icon renderer as the annotation toolbar.
 
+Canvas boundary changes affect only preview and export clipping. The complete vector
+geometry stays in the operation log, so switching back to Grow restores every off-canvas
+part of a layer.
+
 Creation tools return to Select after one placement without selecting the new layer. In
 Select mode, arrows and lines show only their two endpoint handles; other layers show a
 selection boundary. The eight blue/white handles outside the image recrop its corners or
@@ -518,7 +525,8 @@ make check
 The smoke executable exercises region/window/fullscreen startup modes, capture selection,
 working-document persistence (source plus op-log JSON), annotation tools, undo/redo
 replay, vector movement and scaling, text editing, OCR, native-DPI output,
-endpoint-only line selection, annotation-driven canvas growth, external crop handles,
+endpoint-only line selection, annotation-driven canvas growth and clipping policies,
+external crop handles,
 and the native-pixel
 measurement readout on a scaled monitor.
 
