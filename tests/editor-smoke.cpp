@@ -42,8 +42,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numbers>
 #include <csignal>
+#include <numbers>
+#include <optional>
 #include <sys/resource.h>
 
 namespace {
@@ -1777,6 +1778,121 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
     }
   }
   return true;
+}
+
+std::optional<QPointF> changedCenter(const QImage &before, const QImage &after,
+                                     const QRect &search) {
+  if (before.size() != after.size())
+    return std::nullopt;
+  const QRect area = search.intersected(before.rect());
+  QRect changed;
+  for (int y = area.top(); y <= area.bottom(); ++y) {
+    for (int x = area.left(); x <= area.right(); ++x) {
+      const QColor first = before.pixelColor(x, y);
+      const QColor second = after.pixelColor(x, y);
+      const int delta = std::max({std::abs(first.red() - second.red()),
+                                  std::abs(first.green() - second.green()),
+                                  std::abs(first.blue() - second.blue())});
+      if (delta > 12)
+        changed |= QRect(x, y, 1, 1);
+    }
+  }
+  if (changed.isEmpty())
+    return std::nullopt;
+  return QRectF(changed).center();
+}
+
+/** The counter preview and committed counter share a nine-pixel up-left
+ *  pointer lead at every zoom. */
+bool runMarkerPointerOffsetSmoke(QApplication &application, QString &error) {
+  const auto exercise = [&](bool zoomed) {
+    CaptureData capture;
+    capture.monitor.name = QStringLiteral("TEST");
+    capture.monitor.geometry = {0, 0, 800, 600};
+    capture.monitor.pixelSize = {800, 600};
+    capture.monitor.scale = 1.0;
+    capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+    capture.source.fill(QColor(QStringLiteral("#182030")));
+    capture.previewSize = capture.source.size();
+
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::Fullscreen);
+    editor.resize(800, 600);
+    editor.show();
+    application.processEvents();
+
+    if (zoomed) {
+      QWheelEvent wheel(QPointF(400, 300), QPointF(400, 300), {}, {0, 120},
+                        Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
+                        false);
+      QApplication::sendEvent(&editor, &wheel);
+      application.processEvents();
+    }
+
+    const QPoint pointer = zoomed ? QPoint(510, 350) : QPoint(350, 280);
+    QTest::mouseMove(&editor, pointer, 10);
+    application.processEvents();
+    const QImage withoutMarker = editor.grab().toImage();
+
+    QTest::keyClick(&editor, Qt::Key_C);
+    QTest::mouseMove(&editor, QPoint(0, 0), 10);
+    application.processEvents();
+    const QImage markerToolAtRest = editor.grab().toImage();
+    QTest::mouseMove(&editor, pointer, 10);
+    application.processEvents();
+    const QImage ghost = editor.grab().toImage();
+    const qreal dpr = ghost.devicePixelRatio();
+    const QRect search(qFloor((pointer.x() - 36) * dpr),
+                       qFloor((pointer.y() - 36) * dpr), qCeil(72 * dpr),
+                       qCeil(72 * dpr));
+    const std::optional<QPointF> ghostCenter =
+        changedCenter(withoutMarker, ghost, search);
+    const QPointF expectedCenter = (QPointF(pointer) - QPointF(9, 9)) * dpr;
+    if (!ghostCenter || QLineF(*ghostCenter, expectedCenter).length() >
+                            std::max<qreal>(1.5, dpr * 1.5)) {
+      error = QStringLiteral("Counter ghost did not stay 9 px ahead of the "
+                             "pointer at %1")
+                  .arg(zoomed ? QStringLiteral("zoom") : QStringLiteral("fit"));
+      return false;
+    }
+
+    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, pointer);
+    application.processEvents();
+    const QVector<Operation> &ops = editor.operationLog();
+    if (ops.isEmpty() || ops.constLast().type != Operation::Type::Annotate ||
+        ops.constLast().annotations.size() != 1 ||
+        ops.constLast().annotations.constFirst().kind !=
+            Annotation::Kind::Marker) {
+      error = QStringLiteral("Counter pointer-offset click did not commit a "
+                             "marker at %1")
+                  .arg(zoomed ? QStringLiteral("zoom") : QStringLiteral("fit"));
+      return false;
+    }
+
+    // Move the still-armed tool away so the next-number ghost cannot cover
+    // the marker we just committed.
+    QTest::mouseMove(&editor, QPoint(0, 0), 10);
+    application.processEvents();
+    const QImage committed = editor.grab().toImage();
+    const std::optional<QPointF> committedCenter =
+        changedCenter(markerToolAtRest, committed, search);
+    if (!committedCenter || QLineF(*committedCenter, *ghostCenter).length() >
+                                std::max<qreal>(1.0, dpr)) {
+      error = QStringLiteral(
+                  "Counter jumped from its ghost on click at %1 (%2,%3 -> "
+                  "%4,%5)")
+                  .arg(zoomed ? QStringLiteral("zoom") : QStringLiteral("fit"))
+                  .arg(ghostCenter ? ghostCenter->x() : -1)
+                  .arg(ghostCenter ? ghostCenter->y() : -1)
+                  .arg(committedCenter ? committedCenter->x() : -1)
+                  .arg(committedCenter ? committedCenter->y() : -1);
+      return false;
+    }
+    editor.close();
+    application.processEvents();
+    return true;
+  };
+
+  return exercise(false) && exercise(true);
 }
 
 bool runContinuousAnnotationToolsSmoke(QApplication &application,
@@ -4401,8 +4517,8 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
   const QVector<Annotation> all = {
       layer(Annotation::Kind::Rectangle, {100, 95}, {300, 195}),
       layer(Annotation::Kind::Arrow, {350, 95}, {550, 195}),
-      layer(Annotation::Kind::Marker, {150, 295}, {}, 1),
-      layer(Annotation::Kind::Marker, {250, 295}, {}, 2)};
+      layer(Annotation::Kind::Marker, {141, 286}, {}, 1),
+      layer(Annotation::Kind::Marker, {241, 286}, {}, 2)};
   if (!snapshotMatches(expected(all))) {
     error = QStringLiteral("Select-all smoke could not draw its four layers");
     return false;
@@ -4465,7 +4581,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 312));
   application.processEvents();
   if (!snapshotMatches(
-          expected({layer(Annotation::Kind::Marker, {200, 195}, {}, 1)}))) {
+          expected({layer(Annotation::Kind::Marker, {191, 186}, {}, 1)}))) {
     error = QStringLiteral("Marker numbering did not restart after clearing");
     return false;
   }
@@ -4579,8 +4695,8 @@ bool runDuplicateLayerSmoke(QApplication &application, QString &error) {
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(600, 212));
   QTest::keyClick(&editor, Qt::Key_D, Qt::AltModifier);
   application.processEvents();
-  const Annotation first = marker({500, 95}, 1);
-  const Annotation second = marker({400, 195}, 2);
+  const Annotation first = marker({491, 86}, 1);
+  const Annotation second = marker({391, 186}, 2);
   const QVector<Annotation> withMarkers = {
       left, leftCopy, middle, middleCopy, middleCopyCopy, first, second};
   if (!snapshotMatches(expected(withMarkers))) {
@@ -5241,7 +5357,7 @@ bool runLayerOrderSmoke(QApplication &application, QString &error) {
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 211));
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 211));
   application.processEvents();
-  const QPoint counterCenter(520, 95);
+  const QPoint counterCenter(511, 86);
   const QColor counterInk =
       flushedSnapshot(editor, snapshotPath).pixelColor(counterCenter);
   if (counterInk == QColor(QStringLiteral("#182030"))) {
@@ -6445,6 +6561,10 @@ int main(int argc, char **argv) {
   if (!runAnnotationLayerChecks(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 86;
+  }
+  if (!runMarkerPointerOffsetSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 128;
   }
   if (!runContinuousAnnotationToolsSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
