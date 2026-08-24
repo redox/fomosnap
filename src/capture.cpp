@@ -51,24 +51,34 @@ QFont annotationTextFont(qreal size) {
   return font;
 }
 
-QRectF annotationTextBounds(const Annotation &annotation) {
-  const QFontMetricsF metrics(annotationTextFont(annotation.size));
-  const QStringList lines = annotation.text.split('\n');
+QRectF textLabelBounds(const QFont &font, const QString &text,
+                       const QPointF &glyphTopLeft,
+                       TextBackground background) {
+  const QFontMetricsF metrics(font);
+  const QStringList lines = text.split('\n');
   qreal widestLine = 0.0;
   for (const QString &line : lines)
     widestLine = std::max(widestLine, metrics.horizontalAdvance(line));
   const QRectF glyphs(
-      annotation.start.x(), annotation.start.y() - metrics.ascent(),
-      widestLine,
+      glyphTopLeft.x(), glyphTopLeft.y(), widestLine,
       metrics.height() +
           std::max<qsizetype>(0, lines.size() - 1) * metrics.lineSpacing());
-  if (annotation.textBackground != TextBackground::Pill)
+  if (background != TextBackground::Pill)
     return glyphs;
   // The pill has even side/top padding and a bottom pad that grows with the
   // descender, so commas and tails stay inside the cream.
   const qreal pad = std::max<qreal>(4.0, metrics.height() * 0.18);
   const qreal bottom = std::max(pad, metrics.descent() + 2.0);
   return glyphs.adjusted(-pad, -pad, pad, bottom - metrics.descent());
+}
+
+QRectF annotationTextBounds(const Annotation &annotation) {
+  const QFont font = annotationTextFont(annotation.size);
+  const QFontMetricsF metrics(font);
+  return textLabelBounds(
+      font, annotation.text,
+      {annotation.start.x(), annotation.start.y() - metrics.ascent()},
+      annotation.textBackground);
 }
 
 bool ensurePrivateDirectory(const QString &path) {
