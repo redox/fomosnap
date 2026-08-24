@@ -261,6 +261,12 @@ bool runLoginItemRoundTrip(const QString &home, QString &error) {
         "The login item would not restart the agent after Quit & Reopen");
     return false;
   }
+  if (!contents.contains(QStringLiteral("<key>ThrottleInterval</key>\n"
+                                        "  <integer>1</integer>"))) {
+    error = QStringLiteral(
+        "The login item would wait too long before restarting the agent");
+    return false;
+  }
 
   if (!runToExit({QStringLiteral("--uninstall-agent")}, environment, exitCode,
                  error))
