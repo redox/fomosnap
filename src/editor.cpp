@@ -571,6 +571,8 @@ QString backgroundName(BackgroundStyle style) {
   switch (style) {
   case BackgroundStyle::None:
     return QStringLiteral("None");
+  case BackgroundStyle::Off:
+    return QStringLiteral("Off");
   case BackgroundStyle::Slate:
     return QStringLiteral("Window gray");
   case BackgroundStyle::Aurora:
@@ -587,10 +589,10 @@ QString backgroundName(BackgroundStyle style) {
 
 QString canvasBoundaryName(CanvasBoundaryMode mode) {
   switch (mode) {
-  case CanvasBoundaryMode::Grow:
-    return QStringLiteral("Grow");
-  case CanvasBoundaryMode::Frame:
-    return QStringLiteral("Frame");
+  case CanvasBoundaryMode::Framed:
+    return QStringLiteral("Framed");
+  case CanvasBoundaryMode::Overflow:
+    return QStringLiteral("Overflow");
   case CanvasBoundaryMode::Image:
     return QStringLiteral("Image");
   }
@@ -2381,9 +2383,11 @@ bool CaptureEditor::canvasGrown() const {
 }
 
 BackgroundStyle CaptureEditor::effectiveBackgroundStyle() const {
-  return canvasGrown() && backgroundStyle_ == BackgroundStyle::None
-             ? BackgroundStyle::Slate
-             : backgroundStyle_;
+  const bool automaticFramedBackground =
+      canvasBoundaryMode_ == CanvasBoundaryMode::Framed && canvasGrown() &&
+      backgroundStyle_ == BackgroundStyle::None;
+  return automaticFramedBackground ? BackgroundStyle::Slate
+                                   : backgroundStyle_;
 }
 
 void CaptureEditor::applyEditState(const EditState &state) {
@@ -2547,29 +2551,29 @@ void CaptureEditor::commitCanvasBoundary(CanvasBoundaryMode mode) {
 }
 
 void CaptureEditor::cycleCanvasBoundary(bool reverse) {
-  CanvasBoundaryMode next = CanvasBoundaryMode::Grow;
+  CanvasBoundaryMode next = CanvasBoundaryMode::Framed;
   if (reverse) {
     switch (canvasBoundaryMode_) {
-    case CanvasBoundaryMode::Grow:
+    case CanvasBoundaryMode::Framed:
       next = CanvasBoundaryMode::Image;
       break;
-    case CanvasBoundaryMode::Frame:
-      next = CanvasBoundaryMode::Grow;
+    case CanvasBoundaryMode::Overflow:
+      next = CanvasBoundaryMode::Framed;
       break;
     case CanvasBoundaryMode::Image:
-      next = CanvasBoundaryMode::Frame;
+      next = CanvasBoundaryMode::Overflow;
       break;
     }
   } else {
     switch (canvasBoundaryMode_) {
-    case CanvasBoundaryMode::Grow:
-      next = CanvasBoundaryMode::Frame;
+    case CanvasBoundaryMode::Framed:
+      next = CanvasBoundaryMode::Overflow;
       break;
-    case CanvasBoundaryMode::Frame:
+    case CanvasBoundaryMode::Overflow:
       next = CanvasBoundaryMode::Image;
       break;
     case CanvasBoundaryMode::Image:
-      next = CanvasBoundaryMode::Grow;
+      next = CanvasBoundaryMode::Framed;
       break;
     }
   }
@@ -2583,13 +2587,16 @@ void CaptureEditor::cycleBackground() {
   bool nextShadow = true;
   switch (backgroundStyle_) {
   case BackgroundStyle::None:
-    // None starts the fullscreen/grown-canvas cycle at Aurora.
+  case BackgroundStyle::Off:
     next = BackgroundStyle::Aurora;
     break;
   case BackgroundStyle::Slate:
-    // Slate alternates shadowed and flat before wrapping to Aurora.
-    next = imageShadow_ ? BackgroundStyle::Slate : BackgroundStyle::Aurora;
-    nextShadow = !imageShadow_;
+    if (imageShadow_) {
+      next = BackgroundStyle::Slate;
+      nextShadow = false;
+    } else {
+      next = BackgroundStyle::Off;
+    }
     break;
   case BackgroundStyle::Aurora:
     next = BackgroundStyle::Sunset;
@@ -2604,11 +2611,15 @@ void CaptureEditor::cycleBackground() {
     next = BackgroundStyle::Slate;
     break;
   }
-  setStatus(QStringLiteral("Backdrop: %1 · shadow %2 · B cycles · Shift+B "
-                           "toggles shadow")
-                .arg(backgroundName(next),
-                     nextShadow ? QStringLiteral("on")
-                                : QStringLiteral("off")));
+  if (next == BackgroundStyle::Off) {
+    setStatus(QStringLiteral("Backdrop: Off · B cycles"));
+  } else {
+    setStatus(QStringLiteral("Backdrop: %1 · shadow %2 · B cycles · Shift+B "
+                             "toggles shadow")
+                  .arg(backgroundName(next),
+                       nextShadow ? QStringLiteral("on")
+                                  : QStringLiteral("off")));
+  }
   commitBackground(next, nextShadow);
 }
 
@@ -2630,7 +2641,7 @@ void CaptureEditor::replayLog() {
   QRectF selection{QPointF(), QSizeF(startSize)};
   BackgroundStyle background = BackgroundStyle::None;
   bool imageShadow = true;
-  CanvasBoundaryMode canvasBoundary = CanvasBoundaryMode::Grow;
+  CanvasBoundaryMode canvasBoundary = CanvasBoundaryMode::Framed;
   QVector<Annotation> annotations;
   QVector<CutOp> cuts;
   int nextMarker = 1;
@@ -5935,14 +5946,17 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   const QRectF sourceImage = sourceFrameWidgetRect();
   const bool grown = canvasGrown();
   const BackgroundStyle background = effectiveBackgroundStyle();
-  const bool hasBackground = background != BackgroundStyle::None;
+  const bool hasBackground = background != BackgroundStyle::None &&
+                             background != BackgroundStyle::Off;
+  const bool framedBackground =
+      hasBackground && canvasBoundaryMode_ == CanvasBoundaryMode::Framed;
   if (grown) {
     // Extension is the canvas itself, while the source remains the image card
     // floating above it. Never shadow the expanded canvas edge.
     paintCaptureBackground(painter, image, background);
-    if (imageShadow_)
+    if (imageShadow_ && hasBackground)
       paintCaptureImageShadow(painter, sourceImage);
-  } else if (hasBackground) {
+  } else if (framedBackground) {
     const QRectF backing = image.adjusted(-28, -28, 28, 28);
     paintCaptureBackground(painter, backing, background);
     if (imageShadow_)
@@ -5950,7 +5964,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   }
 
   QPainterPath clip;
-  const qreal sourceRadius = !grown && hasBackground ? 10.0 : 0.0;
+  const qreal sourceRadius = !grown && framedBackground ? 10.0 : 0.0;
   clip.addRoundedRect(sourceImage, sourceRadius, sourceRadius);
   const QSize targetSize(qRound(sourceImage.width() * devicePixelRatioF()),
                          qRound(sourceImage.height() * devicePixelRatioF()));
@@ -6077,7 +6091,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     defaultAnnotations.push_back(std::move(preview));
   }
   QRectF previewClip = canvasRect_;
-  if (dragging_ && canvasBoundaryMode_ != CanvasBoundaryMode::Grow) {
+  if (dragging_ && canvasBoundaryMode_ != CanvasBoundaryMode::Framed) {
     previewClip = captureCanvasRect(selection_.size(), defaultAnnotations,
                                     canvasBoundaryMode_);
   }
@@ -6089,18 +6103,20 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     overscan = overscan.subtracted(settledCanvas);
     const bool previewGrown =
         previewClip != QRectF(QPointF(), selection_.size());
+    const bool automaticPreviewBackground =
+        canvasBoundaryMode_ == CanvasBoundaryMode::Framed && previewGrown &&
+        backgroundStyle_ == BackgroundStyle::None;
     const BackgroundStyle previewBackground =
-        previewGrown && backgroundStyle_ == BackgroundStyle::None
-            ? BackgroundStyle::Slate
-            : background;
+        automaticPreviewBackground ? BackgroundStyle::Slate : background;
     painter.save();
     painter.setClipPath(overscan, Qt::IntersectClip);
     paintCaptureBackground(painter, previewClip, previewBackground);
     painter.restore();
   }
-  // Grow shows the complete layer while it is being carried and settles the
-  // background on release. The two clipping modes preview their cutoff live.
-  if (!dragging_ || canvasBoundaryMode_ != CanvasBoundaryMode::Grow)
+  // Framed mode shows the complete layer while it is being carried and
+  // settles the background on release. Overflow and Image preview their final
+  // canvas bounds live.
+  if (!dragging_ || canvasBoundaryMode_ != CanvasBoundaryMode::Framed)
     painter.setClipRect(previewClip, Qt::IntersectClip);
   const bool hasSpotlight = std::any_of(
       defaultAnnotations.cbegin(), defaultAnnotations.cend(),
@@ -6126,17 +6142,21 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       defaultLayerSource.fill(Qt::transparent);
       QPainter basePainter(&defaultLayerSource);
       basePainter.setRenderHints(QPainter::SmoothPixmapTransform);
+      const bool automaticSpotlightBackground =
+          canvasBoundaryMode_ == CanvasBoundaryMode::Framed &&
+          spotlightGrown && backgroundStyle_ == BackgroundStyle::None;
       const BackgroundStyle spotlightBackground =
-          spotlightGrown && backgroundStyle_ == BackgroundStyle::None
-              ? BackgroundStyle::Slate
-              : background;
+          automaticSpotlightBackground ? BackgroundStyle::Slate : background;
       paintCaptureBackground(basePainter, defaultLayerSource.rect(),
                              spotlightBackground);
       const QRectF sourcePixels(-spotlightCanvas.left() * pixelScale,
                                 -spotlightCanvas.top() * pixelScale,
                                 selection_.width() * pixelScale,
                                 selection_.height() * pixelScale);
-      if (imageShadow_)
+      const bool spotlightHasBackground =
+          spotlightBackground != BackgroundStyle::None &&
+          spotlightBackground != BackgroundStyle::Off;
+      if (imageShadow_ && spotlightHasBackground)
         paintCaptureImageShadow(basePainter, sourcePixels, pixelScale,
                                 pixelScale);
       basePainter.drawImage(sourcePixels, redactionLayer);
