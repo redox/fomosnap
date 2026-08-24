@@ -29,6 +29,7 @@
 #include <QThread>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontInfo>
 #include <QFontMetricsF>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -41,6 +42,7 @@
 #include <QtTest/QTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <csignal>
 #include <numbers>
@@ -4311,6 +4313,201 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** Bundled fonts resolve without system dependencies, render as distinct
+ *  faces, cycle for the next/selected label, and survive the operation log. */
+bool runTextFontSmoke(QApplication &application, QString &error) {
+  error = QStringLiteral("Text font smoke failed");
+  const std::array<std::pair<TextFont, QString>, 3> fonts{{
+      {TextFont::Neucha, QStringLiteral("Neucha")},
+      {TextFont::JetBrainsMono, QStringLiteral("JetBrains Mono")},
+      {TextFont::InterDisplay, QStringLiteral("Inter Display")}}};
+  for (const auto &[textFont, family] : fonts) {
+    const QFont resolved = annotationTextFont(5.0, textFont);
+    if (annotationTextFontName(textFont) != family ||
+        QFontInfo(resolved).family() != family) {
+      error = QStringLiteral("Bundled %1 did not resolve (got %2)")
+                  .arg(family, QFontInfo(resolved).family());
+      return false;
+    }
+  }
+
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  Annotation rendered;
+  rendered.kind = Annotation::Kind::Text;
+  rendered.start = {80, 100};
+  rendered.text = QStringLiteral("Font 0123");
+  rendered.color = QColor(QStringLiteral("#ff375f"));
+  rendered.size = 5.0;
+  rendered.textBackground = TextBackground::Plain;
+  std::array<QImage, 3> renderedFonts;
+  for (std::size_t index = 0; index < fonts.size(); ++index) {
+    rendered.textFont = fonts.at(index).first;
+    renderedFonts.at(index) = renderCapture(
+        capture, QRectF(0, 0, 400, 200), {rendered}, BackgroundStyle::None);
+  }
+  if (renderedFonts.at(0) == renderedFonts.at(1) ||
+      renderedFonts.at(1) == renderedFonts.at(2) ||
+      renderedFonts.at(0) == renderedFonts.at(2)) {
+    error = QStringLiteral("Text font selection did not change rendered ink");
+    return false;
+  }
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(700, 500));
+  application.processEvents();
+
+  const auto typeText = [&](const QPoint &at, const QString &content) {
+    QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, at);
+    application.processEvents();
+    QTest::keyClicks(QApplication::focusWidget(), content);
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return,
+                    Qt::ControlModifier);
+    application.processEvents();
+  };
+  const auto lastChangedText = [&]() -> const Annotation * {
+    if (editor.operationLog().isEmpty() ||
+        editor.operationLog().constLast().annotations.isEmpty())
+      return nullptr;
+    const Annotation &annotation =
+        editor.operationLog().constLast().annotations.constFirst();
+    return annotation.kind == Annotation::Kind::Text ? &annotation : nullptr;
+  };
+
+  // Neucha remains the default.
+  QTest::keyClick(&editor, Qt::Key_T);
+  typeText(QPoint(250, 250), QStringLiteral("Default"));
+  if (lastChangedText() == nullptr ||
+      lastChangedText()->textFont != TextFont::Neucha) {
+    error = QStringLiteral("New text did not default to Neucha");
+    return false;
+  }
+
+  // With no text selected, Shift+T cycles the next label and arms Text.
+  QTest::keyClick(&editor, Qt::Key_T, Qt::ShiftModifier);
+  if (editor.armedToolForTest() != CaptureEditor::Tool::Text ||
+      !editor.statusForTest().contains(QStringLiteral("JetBrains Mono"))) {
+    error = QStringLiteral("Shift+T did not select JetBrains Mono");
+    return false;
+  }
+  const QPoint monoPoint(430, 250);
+  typeText(monoPoint, QStringLiteral("Mono"));
+  if (lastChangedText() == nullptr ||
+      lastChangedText()->textFont != TextFont::JetBrainsMono) {
+    error = QStringLiteral("Next text did not keep the cycled font");
+    return false;
+  }
+
+  // A selected label cycles independently and records one undoable patch.
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    monoPoint + QPoint(12, 8));
+  application.processEvents();
+  if (editor.selectedCountForTest() != 1) {
+    error = QStringLiteral("JetBrains Mono text could not be selected");
+    return false;
+  }
+  const int beforeSelectedCycle = editor.operationIndex();
+  QTest::keyClick(&editor, Qt::Key_T, Qt::ShiftModifier);
+  application.processEvents();
+  if (editor.operationIndex() != beforeSelectedCycle + 1 ||
+      lastChangedText() == nullptr ||
+      lastChangedText()->textFont != TextFont::InterDisplay ||
+      !editor.statusForTest().contains(QStringLiteral("Inter Display"))) {
+    error = QStringLiteral("Shift+T did not cycle selected text to Inter");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (editor.operationIndex() != beforeSelectedCycle) {
+    error = QStringLiteral("Selected text font change was not undoable");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  if (editor.operationIndex() != beforeSelectedCycle + 1) {
+    error = QStringLiteral("Selected text font change was not redoable");
+    return false;
+  }
+
+  // Changing a selected layer did not change the next-label default: it was
+  // still Mono, so one Shift+T advances that independent state to Inter.
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 450));
+  QTest::keyClick(&editor, Qt::Key_T, Qt::ShiftModifier);
+  if (!editor.statusForTest().contains(QStringLiteral("Inter Display"))) {
+    error = QStringLiteral("Selected font leaked into the next-text default");
+    return false;
+  }
+  const QPoint interPoint(330, 380);
+  typeText(interPoint, QStringLiteral("Inter"));
+  if (lastChangedText() == nullptr ||
+      lastChangedText()->textFont != TextFont::InterDisplay) {
+    error = QStringLiteral("Inter Display did not apply to the next text");
+    return false;
+  }
+
+  // Reopening a layer uses its own face in the native inline editor and
+  // commits it unchanged.
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseDClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                     interPoint + QPoint(12, 8));
+  application.processEvents();
+  QWidget *draft = QApplication::focusWidget();
+  if (draft == nullptr || draft == &editor ||
+      QFontInfo(draft->font()).family() != QStringLiteral("Inter Display")) {
+    error = QStringLiteral("Inline editor did not use the layer font");
+    return false;
+  }
+  QTest::keyClick(draft, Qt::Key_Return, Qt::ControlModifier);
+  application.processEvents();
+  if (lastChangedText() == nullptr ||
+      lastChangedText()->textFont != TextFont::InterDisplay) {
+    error = QStringLiteral("Re-editing changed the layer font");
+    return false;
+  }
+
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 450));
+  QTest::keyClick(&editor, Qt::Key_T, Qt::ShiftModifier);
+  if (!editor.statusForTest().contains(QStringLiteral("Neucha"))) {
+    error = QStringLiteral("Shift+T did not cycle Inter back to Neucha");
+    return false;
+  }
+
+  QTemporaryDir directory;
+  if (!directory.isValid()) {
+    error = QStringLiteral("Could not create text-font log directory");
+    return false;
+  }
+  OperationLog saved;
+  saved.ops = editor.operationLog();
+  saved.index = editor.operationIndex();
+  saved.previewSize = capture.previewSize;
+  const QString path =
+      QDir(directory.path()).filePath(QStringLiteral("text-fonts.json"));
+  OperationLog loaded;
+  if (!saveOperationLog(path, saved, error) ||
+      !loadOperationLog(path, loaded, error) || loaded != saved) {
+    error = QStringLiteral("Text fonts did not survive operation-log reload: %1")
+                .arg(error);
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
 /** Runs the interaction and rendering smoke checks. */
 bool runTextPillRenderingCheck(QString &error) {
   error = QStringLiteral("Text pill rendering check failed");
@@ -6763,6 +6960,10 @@ int main(int argc, char **argv) {
   if (!runEllipseToolSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 109;
+  }
+  if (!runTextFontSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 128;
   }
   if (!runTextPillRenderingCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;

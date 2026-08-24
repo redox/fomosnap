@@ -30,6 +30,7 @@
 
 #include <QUrl>
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cmath>
 #include <fcntl.h>
@@ -38,15 +39,32 @@
 #include <unistd.h>
 
 bool loadCaptureFonts() {
-  static const int fontId =
-      QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf"));
-  return fontId >= 0;
+  static const std::array<int, 3> fontIds{
+      QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf")),
+      QFontDatabase::addApplicationFont(
+          QStringLiteral(":/fonts/JetBrainsMono-Regular.ttf")),
+      QFontDatabase::addApplicationFont(
+          QStringLiteral(":/fonts/InterDisplay-SemiBold.ttf"))};
+  return std::ranges::all_of(fontIds, [](int id) { return id >= 0; });
 }
 
-QFont annotationTextFont(qreal size) {
+QString annotationTextFontName(TextFont textFont) {
+  switch (textFont) {
+  case TextFont::Neucha:
+    return QStringLiteral("Neucha");
+  case TextFont::JetBrainsMono:
+    return QStringLiteral("JetBrains Mono");
+  case TextFont::InterDisplay:
+    return QStringLiteral("Inter Display");
+  }
+  return QStringLiteral("Neucha");
+}
+
+QFont annotationTextFont(qreal size, TextFont textFont) {
   static_cast<void>(loadCaptureFonts());
-  QFont font(QStringLiteral("Neucha"));
-  font.setWeight(QFont::Normal);
+  QFont font(annotationTextFontName(textFont));
+  font.setWeight(textFont == TextFont::InterDisplay ? QFont::DemiBold
+                                                    : QFont::Normal);
   font.setItalic(false);
   font.setPixelSize(qRound(std::max<qreal>(18.0, size * 5.0)));
   return font;
@@ -74,7 +92,7 @@ QRectF textLabelBounds(const QFont &font, const QString &text,
 }
 
 QRectF annotationTextBounds(const Annotation &annotation) {
-  const QFont font = annotationTextFont(annotation.size);
+  const QFont font = annotationTextFont(annotation.size, annotation.textFont);
   const QFontMetricsF metrics(font);
   return textLabelBounds(
       font, annotation.text,
@@ -298,7 +316,7 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation) {
     return;
   }
 
-  const QFont font = annotationTextFont(annotation.size);
+  const QFont font = annotationTextFont(annotation.size, annotation.textFont);
   if (annotation.textBackground == TextBackground::Pill) {
     // A cream pill under the glyphs keeps text readable on any capture or
     // shape beneath it (the default text background).
@@ -1247,6 +1265,26 @@ bool backgroundStyleFromName(const QString &name, BackgroundStyle &style) {
   return true;
 }
 
+QString textFontStyleName(TextFont textFont) {
+  switch (textFont) {
+  case TextFont::Neucha:
+    return QStringLiteral("neucha");
+  case TextFont::JetBrainsMono:
+    return QStringLiteral("jetbrains-mono");
+  case TextFont::InterDisplay:
+    return QStringLiteral("inter-display");
+  }
+  return QStringLiteral("neucha");
+}
+
+TextFont textFontFromStyleName(const QString &name) {
+  if (name == QStringLiteral("jetbrains-mono"))
+    return TextFont::JetBrainsMono;
+  if (name == QStringLiteral("inter-display"))
+    return TextFont::InterDisplay;
+  return TextFont::Neucha;
+}
+
 QJsonObject annotationToJson(const Annotation &annotation) {
   QJsonObject object;
   object.insert(QStringLiteral("id"), QString::number(annotation.id));
@@ -1258,6 +1296,9 @@ QJsonObject annotationToJson(const Annotation &annotation) {
   object.insert(QStringLiteral("size"), annotation.size);
   if (!annotation.text.isEmpty())
     object.insert(QStringLiteral("text"), annotation.text);
+  if (annotation.kind == Annotation::Kind::Text)
+    object.insert(QStringLiteral("textFont"),
+                  textFontStyleName(annotation.textFont));
   if (annotation.number > 0)
     object.insert(QStringLiteral("number"), annotation.number);
   if (!annotation.points.isEmpty()) {
@@ -1309,6 +1350,8 @@ bool annotationFromJson(const QJsonObject &object, Annotation &annotation,
   annotation.color = QColor(object.value(QStringLiteral("color")).toString());
   annotation.size = object.value(QStringLiteral("size")).toDouble(4.0);
   annotation.text = object.value(QStringLiteral("text")).toString();
+  annotation.textFont = textFontFromStyleName(
+      object.value(QStringLiteral("textFont")).toString());
   annotation.number = object.value(QStringLiteral("number")).toInt();
   annotation.points.clear();
   for (const QJsonValue point : object.value(QStringLiteral("points")).toArray())
