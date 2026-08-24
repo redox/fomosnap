@@ -36,7 +36,8 @@ global hotkey were rewritten against macOS frameworks.
   shadowed and flat window gray, and Off so a background can always be removed.
   Overflow with no backdrop leaves its added pixels transparent. `Shift+B`
   toggles the current shadow directly, and undo/delete can contract grown strips.
-- Arrows, straight lines, smoothed freehand strokes, and translucent highlighter
+- Standard, pointy, curved, and double-headed arrows; straight lines; smoothed
+  freehand strokes; and translucent highlighter
   strokes that automatically match and stay straight across screenshot text (with
   freehand fallback), plus hollow or filled rectangles (optionally rounded) and
   ellipses, numbered markers, editable text in Neucha, JetBrains Mono, or Inter
@@ -458,7 +459,7 @@ without reaching for the pointer.
 | Input | Action |
 |---|---|
 | `V` | Select/move/resize layers; carrying one past the source grows the canvas; drag empty canvas for a marquee; multi-select outlines each layer without treating the canvas as one layer; wheel scales the selected layer |
-| `A` | Arrow |
+| `A` | Arrow; press again to cycle Standard, Pointy, Curved, and Double styles |
 | `S` | Spotlight/loupe; press again to cycle ellipse, rectangle, rounded |
 | `L` | Straight line |
 | `F` | Freehand pen; medium `3/6` smoothing by default, while `0/6` preserves the raw pointer path |
@@ -480,7 +481,7 @@ without reaching for the pointer.
 | `Shift`+wheel | Scroll a zoomed capture sideways (a wide stitch); never changes the zoom |
 | `Cmd`+wheel · middle-drag | Zoom about the cursor · pan by dragging |
 | `+` / `-` / `0` (also with `Cmd`) | Zoom in / out / fit |
-| Hold `Shift` while dragging | Make rectangles, ellipses, and spotlights 1:1; snap lines and arrows to 45°; while dragging a selected layer's handle, keep a rectangle, redaction or spotlight's aspect ratio (lines and arrows: 45°) |
+| Hold `Shift` while dragging | Make rectangles, ellipses, and spotlights 1:1; snap line and arrow endpoints to 45°; keep curved-arrow bends centered; while dragging a selected layer's handle, keep a rectangle, redaction or spotlight's aspect ratio (lines and arrows: 45°) |
 | Hold `Alt` while dragging | Center rectangles, ellipses, and spotlights on the press point; add `Shift` for a centered square/circle |
 | `←` `↑` `→` `↓` | Nudge the selected layer 1 px; hold `Shift` for 10 px (a held key is one undo step). With nothing selected, pan a zoomed capture |
 | Double-click text · `Enter` on a selected text | Reopen text editing |
@@ -530,9 +531,11 @@ geometry stays in the operation log, so switching back to Overflow restores ever
 part of a layer.
 
 Creation tools return to Select after one placement without selecting the new layer. In
-Select mode, arrows and lines show only their two endpoint handles; other layers show a
-selection boundary. The eight blue/white handles outside the image recrop its corners or
-edges. After the canvas grows, those crop handles remain on the original source frame.
+Select mode, lines and straight arrows show two endpoint handles; curved and double arrows
+add an on-curve handle for bending the arc (hold `Shift` to keep that bend centered). Other
+layers show a selection boundary. The eight blue/white handles outside the image recrop
+its corners or edges. After the canvas grows, those crop handles remain on the original
+source frame.
 
 ## Development and verification
 

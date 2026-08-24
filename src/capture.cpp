@@ -21,7 +21,6 @@
 #include <QJsonValue>
 #include <QLinearGradient>
 #include <QPainter>
-#include <QPointF>
 #include <QPainterPath>
 #include <QRandomGenerator>
 #include <QRegularExpression>
@@ -34,6 +33,7 @@
 #include <cerrno>
 #include <cmath>
 #include <fcntl.h>
+#include <numbers>
 #include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -400,7 +400,7 @@ QString screenshotTargetPath(QString &error, const QString &appSlug) {
 }
 
 void drawAnnotation(QPainter &painter, const Annotation &annotation,
-                    qreal canvasWidth = 0.0) {
+                    qreal canvasWidth, qreal arrowDisplayScale) {
   // Redactions replace source pixels in renderCapture before ordinary vector
   // annotations are painted. They must never be approximated by a translucent
   // overlay here because that could leave recoverable source data in exports.
@@ -475,22 +475,21 @@ void drawAnnotation(QPainter &painter, const Annotation &annotation,
   }
 
   if (annotation.kind == Annotation::Kind::Arrow) {
-    const QLineF line(annotation.start, annotation.end);
-    if (line.length() < 1.0)
-      return;
-    const qreal angle = std::atan2(line.dy(), line.dx());
-    const qreal headLength = std::max<qreal>(14.0, annotation.size * 4.2);
-    const qreal halfWidth = headLength * 0.46;
-    const QPointF direction(std::cos(angle), std::sin(angle));
-    const QPointF perpendicular(-direction.y(), direction.x());
-    const QPointF base = annotation.end - direction * headLength;
-    const QPointF stemEnd = annotation.end - direction * (headLength * 0.5);
-    painter.drawLine(annotation.start, stemEnd);
-    QPolygonF head;
-    head << annotation.end << base + perpendicular * halfWidth
-         << base - perpendicular * halfWidth;
-    painter.setPen(Qt::NoPen);
-    painter.drawPolygon(head);
+    const ArrowGeometry geometry =
+        makeArrowGeometry(annotation, arrowDisplayScale);
+    painter.save();
+    if (!geometry.fill.isEmpty()) {
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(annotation.color);
+      painter.drawPath(geometry.fill);
+    }
+    if (!geometry.stroke.isEmpty()) {
+      painter.setPen(QPen(annotation.color, geometry.strokeWidth,
+                          Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+      painter.setBrush(Qt::NoBrush);
+      painter.drawPath(geometry.stroke);
+    }
+    painter.restore();
     return;
   }
 
@@ -705,9 +704,23 @@ QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
 
 } // namespace
 
+QRectF arrowVisualBounds(const Annotation &annotation, qreal displayScale) {
+  return arrowVisualBoundsInternal(annotation, displayScale);
+}
+
+QPointF arrowCurveHandlePoint(const Annotation &annotation) {
+  return quadraticPoint(annotation.start, curveControl(annotation),
+                        annotation.end, 0.5);
+}
+
+bool arrowContainsPoint(const Annotation &annotation, const QPointF &point,
+                        qreal tolerance) {
+  return arrowContainsPointInternal(annotation, point, tolerance);
+}
+
 void paintAnnotation(QPainter &painter, const Annotation &annotation,
-                     qreal canvasWidth) {
-  drawAnnotation(painter, annotation, canvasWidth);
+                     qreal canvasWidth, qreal arrowDisplayScale) {
+  drawAnnotation(painter, annotation, canvasWidth, arrowDisplayScale);
 }
 
 QPainterPath spotlightPath(const Annotation &annotation) {
@@ -801,7 +814,8 @@ void paintSpotlights(QPainter &painter, const QImage &source,
 
 void paintDefaultLayer(QPainter &painter, const QImage &redacted,
                        const QRectF &logicalBounds,
-                       const QVector<Annotation> &annotations) {
+                       const QVector<Annotation> &annotations,
+                       qreal arrowDisplayScale) {
   paintSpotlights(painter, redacted, logicalBounds, QRectF(redacted.rect()),
                   annotations);
   // What a capture is annotated *with* goes over what it is annotated *on*:
@@ -812,7 +826,8 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
   const auto passOver = [&](bool (*belongs)(Annotation::Kind)) {
     for (const Annotation &annotation : annotations) {
       if (belongs(annotation.kind))
-        paintAnnotation(painter, annotation);
+        paintAnnotation(painter, annotation, logicalBounds.right(),
+                        arrowDisplayScale);
     }
   };
   passOver([](Annotation::Kind kind) {
@@ -1551,6 +1566,30 @@ bool annotationKindFromName(const QString &name, Annotation::Kind &kind) {
   return true;
 }
 
+QString arrowStyleName(ArrowStyle style) {
+  switch (style) {
+  case ArrowStyle::Standard:
+    return QStringLiteral("standard");
+  case ArrowStyle::Pointy:
+    return QStringLiteral("pointy");
+  case ArrowStyle::Curved:
+    return QStringLiteral("curved");
+  case ArrowStyle::Double:
+    return QStringLiteral("double");
+  }
+  return QStringLiteral("standard");
+}
+
+ArrowStyle arrowStyleFromName(const QString &name) {
+  if (name == QStringLiteral("pointy"))
+    return ArrowStyle::Pointy;
+  if (name == QStringLiteral("curved"))
+    return ArrowStyle::Curved;
+  if (name == QStringLiteral("double"))
+    return ArrowStyle::Double;
+  return ArrowStyle::Standard;
+}
+
 } // namespace
 
 QString backgroundStyleName(BackgroundStyle style) {
@@ -1655,6 +1694,13 @@ QJsonObject annotationToJson(const Annotation &annotation) {
   object.insert(QStringLiteral("size"), annotation.size);
   if (annotation.kind == Annotation::Kind::Text)
     object.insert(QStringLiteral("textWidth"), annotation.textWidth);
+  if (annotation.kind == Annotation::Kind::Arrow) {
+    object.insert(QStringLiteral("arrowStyle"),
+                  arrowStyleName(annotation.arrowStyle));
+    if (annotation.curveControl)
+      object.insert(QStringLiteral("curveControl"),
+                    pointArray(*annotation.curveControl));
+  }
   if (!annotation.text.isEmpty())
     object.insert(QStringLiteral("text"), annotation.text);
   if (annotation.kind == Annotation::Kind::Text)
@@ -1718,6 +1764,13 @@ bool annotationFromJson(const QJsonObject &object, Annotation &annotation,
   annotation.end = pointFromArray(object.value(QStringLiteral("end")));
   annotation.color = QColor(object.value(QStringLiteral("color")).toString());
   annotation.size = object.value(QStringLiteral("size")).toDouble(4.0);
+  annotation.arrowStyle =
+      arrowStyleFromName(object.value(QStringLiteral("arrowStyle")).toString());
+  annotation.curveControl.reset();
+  if (annotation.kind == Annotation::Kind::Arrow &&
+      object.value(QStringLiteral("curveControl")).isArray())
+    annotation.curveControl =
+        pointFromArray(object.value(QStringLiteral("curveControl")));
   annotation.text = object.value(QStringLiteral("text")).toString();
   annotation.textWidth =
       object.value(QStringLiteral("textWidth")).toDouble(0.0);
