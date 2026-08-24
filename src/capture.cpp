@@ -691,7 +691,8 @@ bool probeFocusedMonitor(MonitorInfo &monitor, QString &error) {
 }
 
 bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
-                          bool includeWindows, QString &error) {
+                          bool includeWindows, QString &error,
+                          bool excludeOwnWindows) {
   StartupTimingScope timing("monitor pixels + window discovery");
   capture.monitor = monitor;
   const QRect geometry = capture.monitor.geometry;
@@ -708,7 +709,8 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
                   .arg(testCapture);
       return false;
     }
-  } else if (!captureOutputSurface(monitor, capture.source, error)) {
+  } else if (!captureOutputSurface(monitor, capture.source, error,
+                                   excludeOwnWindows)) {
     if (!error.startsWith(QStringLiteral("Screen capture failed:")))
       error = QStringLiteral("Screen capture failed: %1").arg(error);
     return false;

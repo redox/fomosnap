@@ -60,7 +60,8 @@ public:
    * discovery runs alongside the grab and is skipped when `includeWindows` is
    * false, for callers that never show the overlay.
    */
-  void startCapture(CaptureMode mode, bool includeWindows);
+  void startCapture(CaptureMode mode, bool includeWindows,
+                    bool excludeOwnWindows = false);
   /**
    * Blocks until the in-flight snapshot persistence has drained, letting the
    * event loop run meanwhile. Returns whether the last write succeeded.
@@ -404,6 +405,7 @@ private:
   void beginText(const QPointF &point, int annotationIndex = -1,
                  int lineCapacity = 1);
   void chooseWindow(int index);
+  void captureSelectionForEdit(CaptureMode mode, QString status);
   /// Capture-kind tabs across the top of the select overlay. Region and
   /// Window are modes (one is always lit); Fullscreen acts at once.
   using SelectTab = CaptureKind;
@@ -413,8 +415,8 @@ private:
   void setWindowMode(bool enabled);
   void setScrollMode(bool enabled);
   void selectFullscreen();
-  /// Back from the editor to the select phase: the op log is dropped and the
-  /// frozen screen is offered again for a new region or window.
+  /// Back from the editor to the select phase: the op log is dropped and a
+  /// live screen is offered again for a new region or window.
   void returnToSelect(bool windowMode);
   /// Scroll capture takes over the surface with `region` drawn.
   void startScrollCapture(const QRect &region);
@@ -422,8 +424,8 @@ private:
   void endScrollCapture();
   /// A stitched scroll capture becomes the image being edited.
   void adoptStitched(const QImage &image);
-  /// The editor's other mode of working: not a region of the frozen screen
-  /// but an image handed to it, with the op log it was last edited with.
+  /// The editor's other mode of working: not a region of the live screen but
+  /// an image handed to it, with the op log it was last edited with.
   /// `kind` is the tab lit for it.
   void adoptImage(QImage image, OperationLog log, SelectTab kind,
                   const QString &status);
@@ -524,7 +526,7 @@ private:
   bool scrollMode_ = false;
   qreal safeAreaTop_ = 0.0;
   /// The image being edited was handed to the editor (stitched scroll,
-  /// shelved capture) rather than cut from the frozen screen.
+  /// shelved capture) rather than cut from the live screen.
   bool handedImage_ = false;
   /// The monitor as captured, kept apart from capture_.monitor (which a
   /// stitched result replaces) so the screen can be captured again.
@@ -536,6 +538,8 @@ private:
   CaptureMode captureMode_ = CaptureMode::Region;
   /// Which tab produced the capture being edited; lit in the edit phase.
   SelectTab editedKind_ = SelectTab::Region;
+  /// A source-less screen session keeps the desktop visible during selection.
+  bool liveSelection_ = false;
   std::optional<RecentSnap> editingRecent_;
   QVector<RecentSnap> recents_;
   QFutureWatcher<QVector<RecentSnap>> recentsWatcher_;
@@ -639,6 +643,8 @@ private:
   bool capturePending_ = false;
   bool captureStarted_ = false;
   bool firstPaintReported_ = false;
+  bool captureForSelection_ = false;
+  QString pendingEditStatus_;
   CaptureMode pendingMode_ = CaptureMode::Region;
   // Background render for --pin.
   /// Path on success, empty + error set on failure. The render and the PNG

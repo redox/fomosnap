@@ -126,19 +126,21 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] QFont annotationTextFont(qreal size);
 /**
  * Discovers the focused monitor (name, geometry, scale): the display under
- * the pointer. Safe to call on the main thread to position the overlay after
- * the pixel capture has already produced a frozen frame.
+ * the pointer. Safe to call on the main thread to position the live selection
+ * overlay before its pixel capture is needed.
  */
 [[nodiscard]] bool probeFocusedMonitor(MonitorInfo &monitor, QString &error);
 /**
  * Captures the focused monitor's pixels onto the given monitor, and its window
- * list when `includeWindows` is set. Window discovery runs alongside the screen
- * grab, so callers that never show the overlay should skip it. Pure I/O and
- * image work (no GUI objects): safe on any thread.
+ * list when `includeWindows` is set. When `excludeOwnWindows` is true, current
+ * FOMOsnap windows are omitted from the frame so a visible overlay cannot
+ * become part of the capture. Pure I/O and image work (no GUI objects): safe
+ * on any thread.
  */
 [[nodiscard]] bool captureMonitorPixels(const MonitorInfo &monitor,
                                         CaptureData &capture,
-                                        bool includeWindows, QString &error);
+                                        bool includeWindows, QString &error,
+                                        bool excludeOwnWindows = false);
 /** Convenience: probes the focused monitor, then captures its pixels. */
 [[nodiscard]] bool captureFocusedMonitor(CaptureData &capture,
                                          bool includeWindows, QString &error);
@@ -180,7 +182,8 @@ private:
 };
 
 [[nodiscard]] bool captureOutputSurface(const MonitorInfo &monitor,
-                                        QImage &image, QString &error);
+                                        QImage &image, QString &error,
+                                        bool excludeOwnWindows = false);
 [[nodiscard]] QString operationLogPath(const QString &imagePath);
 [[nodiscard]] bool saveOperationLog(const QString &path, const OperationLog &log,
                                     QString &error);

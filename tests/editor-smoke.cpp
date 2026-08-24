@@ -5881,6 +5881,128 @@ bool runAreaLastRegionSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+bool runLiveSelectionCaptureSmoke(QApplication &application, QString &error) {
+  QTemporaryDir captureDir;
+  if (!captureDir.isValid()) {
+    error = QStringLiteral("Could not create live selection capture directory");
+    return false;
+  }
+
+  QImage source(320, 240, QImage::Format_RGB32);
+  source.fill(QColor(QStringLiteral("#28405c")));
+  const QString sourcePath =
+      QDir(captureDir.path()).filePath(QStringLiteral("source.png"));
+  if (!source.save(sourcePath, "PNG")) {
+    error = QStringLiteral("Could not create live selection source");
+    return false;
+  }
+
+  const QByteArray oldCapture = qgetenv("FOMOSNAP_TEST_CAPTURE");
+  qputenv("FOMOSNAP_TEST_CAPTURE", sourcePath.toUtf8());
+  const auto restoreCapture = qScopeGuard([&] {
+    if (oldCapture.isEmpty())
+      qunsetenv("FOMOSNAP_TEST_CAPTURE");
+    else
+      qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
+  });
+
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 320, 240};
+  capture.monitor.pixelSize = {320, 240};
+  capture.monitor.scale = 1.0;
+  capture.previewSize = capture.monitor.geometry.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(320, 240);
+  editor.show();
+  application.processEvents();
+  const QImage liveOverlay = editor.grab().toImage();
+  const QColor livePixel =
+      liveOverlay.isNull() ? QColor() : liveOverlay.pixelColor(10, 120);
+  if (editor.statusForTest().contains(QStringLiteral("Capturing")) ||
+      liveOverlay.isNull() || livePixel.alpha() >= 255) {
+    error = QStringLiteral(
+                "Live selection did not show a translucent, immediately "
+                "interactive overlay: status=%1 alpha=%2")
+                .arg(editor.statusForTest())
+                .arg(livePixel.alpha());
+    return false;
+  }
+
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 40));
+  QTest::mouseMove(&editor, QPoint(200, 180), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(200, 180));
+  QElapsedTimer timer;
+  timer.start();
+  while (editor.captureData().source.isNull() && timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+
+  if (editor.captureData().source.isNull() || editor.selectingForTest()) {
+    error = QStringLiteral(
+        "Committed live selection did not capture and enter the editor");
+    return false;
+  }
+  if (editor.renderCurrentOutput().size() != QSize(160, 140)) {
+    error = QStringLiteral("Live selection captured the wrong region size");
+    return false;
+  }
+  if (editor.renderCurrentOutput().pixelColor(0, 0) !=
+      source.pixelColor(40, 40)) {
+    error = QStringLiteral("Live selection did not use the committed frame");
+    return false;
+  }
+  editor.close();
+
+  CaptureData windowCapture = capture;
+  windowCapture.windows = {
+      {{60, 50, 120, 80}, QStringLiteral("window"), QStringLiteral("Window"),
+       QStringLiteral("TestApp")}};
+  CaptureEditor windowEditor(windowCapture, CaptureEditor::CaptureMode::Window);
+  windowEditor.resize(320, 240);
+  windowEditor.show();
+  application.processEvents();
+  QTest::mouseClick(&windowEditor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(100, 80));
+  timer.restart();
+  while (windowEditor.captureData().source.isNull() && timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (windowEditor.captureData().source.isNull() ||
+      windowEditor.selectingForTest() ||
+      windowEditor.renderCurrentOutput().size() != QSize(120, 80)) {
+    error = QStringLiteral(
+        "Committed live window selection did not capture and enter the editor");
+    return false;
+  }
+  windowEditor.close();
+
+  CaptureEditor fullscreenEditor(capture);
+  fullscreenEditor.resize(320, 240);
+  fullscreenEditor.show();
+  application.processEvents();
+  QTest::keyClick(&fullscreenEditor, Qt::Key_A, Qt::ControlModifier);
+  timer.restart();
+  while (fullscreenEditor.captureData().source.isNull() &&
+         timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (fullscreenEditor.captureData().source.isNull() ||
+      fullscreenEditor.selectingForTest() ||
+      fullscreenEditor.renderCurrentOutput().size() != QSize(320, 240)) {
+    error = QStringLiteral(
+        "Ctrl+A did not capture the live desktop as fullscreen");
+    return false;
+  }
+  fullscreenEditor.close();
+  return true;
+}
+
 int main(int argc, char **argv) {
   // Re-executed by the instance-lock checks as the process holding the lock.
   const QString heldLockPath =
@@ -6089,6 +6211,10 @@ int main(int argc, char **argv) {
   if (!runAsyncCaptureRegionSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 82;
+  }
+  if (!runLiveSelectionCaptureSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 128;
   }
   if (!runPinLayoutSmoke(snapshotError)) {
     qWarning().noquote() << snapshotError;
