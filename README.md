@@ -101,6 +101,47 @@ make build FOMOSNAP_CODESIGN_IDENTITY="Developer ID Application: ..."
 A self-signed certificate made in Keychain Access works too; it only has to be
 stable, not trusted by Apple.
 
+### Release signing and notarization
+
+The public Homebrew release must use a **Developer ID Application** certificate
+and Apple notarization. Ad-hoc signatures are suitable for local development,
+but Gatekeeper blocks them and Screen Recording grants do not survive rebuilds.
+The release workflow signs only version tags, so pull requests do not need
+Apple credentials.
+
+Before the first signed release:
+
+1. Enroll in the [Apple Developer Program](https://developer.apple.com/programs/)
+   and create a **Developer ID Application** certificate under Certificates,
+   Identifiers & Profiles. Export the certificate and private key from
+   Keychain Access as a password-protected `.p12`.
+2. In App Store Connect, create a **Team API key** under Users and Access >
+   Integrations > App Store Connect API. Download its `.p8` file immediately;
+   Apple provides the private key only once. Record its Key ID and the team's
+   Issuer ID.
+3. Add these GitHub Actions secrets to the repository:
+   `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
+   `APPLE_API_KEY_P8_BASE64`, `APPLE_API_KEY_ID`, and
+   `APPLE_API_ISSUER_ID`.
+4. Add the exact certificate identity as the repository variable
+   `FOMOSNAP_CODESIGN_IDENTITY`, for example
+   `Developer ID Application: Example, Inc. (ABCDE12345)`. Verify it locally
+   with `security find-identity -v -p codesigning`.
+
+Encode the two files without putting either private key in the repository:
+
+```bash
+base64 -i FOMOsnap-Developer-ID.p12 | tr -d '\n' | pbcopy
+base64 -i AuthKey_KEYID.p8 | tr -d '\n' | pbcopy
+```
+
+Paste each result into its matching GitHub secret. The tag workflow imports
+the certificate into a temporary keychain, signs with hardened runtime,
+submits the app to `notarytool`, staples the ticket, and verifies it with
+Gatekeeper before publishing the archive. Create the next version only after
+all five secrets and the identity variable are configured; older releases
+remain ad-hoc signed and must be replaced by a new release.
+
 The agent never asks for the permission at launch, only when a capture is
 actually taken. Asking at launch meant prompting at login, exiting because the
 permission was missing, and being restarted by launchd — prompting again,
