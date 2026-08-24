@@ -129,6 +129,11 @@ executable inside the bundle as `fomosnap`. Always launch it through that
 symlink or the bundle itself: Screen Recording is granted to the bundle's
 identity, and a binary copied out of it has none.
 
+The first `brew install fomosnap` installs and starts the resident agent. On
+later upgrades, Homebrew reloads the agent if it is still installed, so the
+new binary takes effect immediately. If you ran `fomosnap --uninstall-agent`,
+upgrades preserve that choice; run `fomosnap --install-agent` to enable it again.
+
 Homebrew keeps the app in its own prefix rather than `/Applications`. To get it
 into Launchpad and Spotlight:
 
