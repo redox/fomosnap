@@ -300,11 +300,16 @@ qreal strokeHitTolerance(const Annotation &annotation) {
 }
 void translateAnnotation(Annotation &annotation, const QPointF &delta) {
   annotation.start += delta;
-  if (hasEndpointHandles(annotation.kind))
+  if (hasEndpointHandles(annotation.kind) ||
+      annotation.kind == Annotation::Kind::Freehand)
     annotation.end += delta;
   if (isStrokeKind(annotation.kind)) {
     for (QPointF &point : annotation.points)
       point += delta;
+    if (annotation.kind == Annotation::Kind::Freehand) {
+      for (QPointF &point : annotation.rawPoints)
+        point += delta;
+    }
   }
 }
 
@@ -1282,14 +1287,19 @@ void CaptureEditor::applyBoxResize(Annotation &annotation, Interaction handle,
     const qreal scaleY =
         (original.height() > 0 ? box.height() / original.height() : 1.0) *
         (flippedY ? -1.0 : 1.0);
-    for (int index = 0; index < annotation.points.size(); ++index) {
-      const QPointF relative =
-          originalAnnotation_.points.at(index) - original.topLeft();
-      const QPointF anchor(scaleX < 0 ? box.right() : box.left(),
-                           scaleY < 0 ? box.bottom() : box.top());
-      annotation.points[index] =
-          anchor + QPointF(relative.x() * scaleX, relative.y() * scaleY);
-    }
+    const QPointF anchor(scaleX < 0 ? box.right() : box.left(),
+                         scaleY < 0 ? box.bottom() : box.top());
+    const auto resizePoints = [&](QVector<QPointF> &resized,
+                                  const QVector<QPointF> &source) {
+      resized.resize(source.size());
+      for (qsizetype index = 0; index < source.size(); ++index) {
+        const QPointF relative = source.at(index) - original.topLeft();
+        resized[index] =
+            anchor + QPointF(relative.x() * scaleX, relative.y() * scaleY);
+      }
+    };
+    resizePoints(annotation.points, originalAnnotation_.points);
+    resizePoints(annotation.rawPoints, originalAnnotation_.rawPoints);
     if (!annotation.points.isEmpty()) {
       annotation.start = annotation.points.first();
       annotation.end = annotation.points.last();
@@ -1389,9 +1399,14 @@ QString CaptureEditor::toolStatus() const {
     return QStringLiteral("Cut · drag a band to remove it");
   case Tool::Highlighter:
     return highlighterStatus();
+  case Tool::Freehand:
+    return QStringLiteral("Pen · size %1 · smoothing %2/%3 · wheel size · "
+                          "Alt+wheel smoothing")
+        .arg(size)
+        .arg(freehandSmoothingLevel_)
+        .arg(stroke::maximumSmoothingLevel);
   case Tool::Arrow:
   case Tool::Line:
-  case Tool::Freehand:
     break;
   }
   const QString name = tool_ == Tool::Arrow      ? QStringLiteral("Arrow")
@@ -1589,7 +1604,6 @@ bool CaptureEditor::adjustSelectedAnnotationRing(int step) {
   // Alt+wheel is the secondary control, and with a layer selected it belongs
   // to that layer rather than to what the next one will look like. Kinds with
   // no second setting say so, and the wheel falls through to the armed tool.
-  beginSelectionAdjust();
   if (selectedAnnotation_ < 0 || selectedAnnotation_ >= annotations_.size())
     return false;
   Annotation &annotation = annotations_[selectedAnnotation_];
@@ -1604,12 +1618,38 @@ bool CaptureEditor::adjustSelectedAnnotationRing(int step) {
     commitPatch({selectedAnnotation_});
     return true;
   }
-  if (annotation.kind != Annotation::Kind::Spotlight)
+  if (annotation.kind == Annotation::Kind::Spotlight) {
+    beginSelectionAdjust();
+    annotation.size =
+        std::clamp(annotation.size + step * 2.0, 0.0, 12.0);
+    setStatus(spotlightStatus(annotation.spotlightShape,
+                              annotation.magnification, annotation.size));
+    commitPatch({selectedAnnotation_});
+    return true;
+  }
+  if (annotation.kind != Annotation::Kind::Freehand)
     return false;
-  annotation.size = std::clamp(annotation.size + step * 2.0, 0.0, 12.0);
-  setStatus(spotlightStatus(annotation.spotlightShape,
-                            annotation.magnification, annotation.size));
-  commitPatch({selectedAnnotation_});
+
+  beginSelectionAdjust();
+  if (annotation.rawPoints.isEmpty()) {
+    setStatus(QStringLiteral("Pen stroke has no smoothing baseline"));
+    return true;
+  }
+  const int next = std::clamp(annotation.smoothingLevel + step,
+                              stroke::minimumSmoothingLevel,
+                              stroke::maximumSmoothingLevel);
+  setStatus(QStringLiteral("Pen smoothing %1/%2 · Alt+wheel adjusts · "
+                           "Ctrl+Z undoes")
+                .arg(next)
+                .arg(stroke::maximumSmoothingLevel));
+  if (next != annotation.smoothingLevel) {
+    annotation.smoothingLevel = next;
+    annotation.points =
+        stroke::smoothFreehand(annotation.rawPoints, annotation.smoothingLevel);
+    annotation.start = annotation.points.first();
+    annotation.end = annotation.points.last();
+    commitPatch({selectedAnnotation_});
+  }
   return true;
 }
 
@@ -2332,8 +2372,11 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
       QStringLiteral("Line · L · Shift snaps 45° · Size %1 · Wheel")
           .arg(qRound(annotationSize_)));
   add(36, QStringLiteral("tool-freehand"), {},
-      QStringLiteral("Freehand · F · Size %1 · Wheel")
-          .arg(qRound(annotationSize_)));
+      QStringLiteral("Freehand · F · Size %1 · Wheel · Smoothing %2/%3 · "
+                     "Alt+Wheel")
+          .arg(qRound(annotationSize_))
+          .arg(freehandSmoothingLevel_)
+          .arg(stroke::maximumSmoothingLevel));
   add(36, QStringLiteral("tool-highlighter"), {}, highlighterTooltip());
   add(36, QStringLiteral("tool-marker"), {},
       QStringLiteral("Number marker · C · Size %1 · Wheel")
@@ -2814,6 +2857,8 @@ void CaptureEditor::replayLog() {
         shift(annotation.start);
         shift(annotation.end);
         for (QPointF &point : annotation.points)
+          shift(point);
+        for (QPointF &point : annotation.rawPoints)
           shift(point);
       }
       if (band > 0.0) {
@@ -4410,6 +4455,8 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
           if (isStrokeKind(annotation.kind)) {
             for (QPointF &point : annotation.points)
               point += annotationDelta;
+            for (QPointF &point : annotation.rawPoints)
+              point += annotationDelta;
             if (!annotation.points.isEmpty()) {
               annotation.start = annotation.points.first();
               annotation.end = annotation.points.last();
@@ -4439,13 +4486,7 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
           const int index = selectedAnnotations_.at(position);
           Annotation &annotation = annotations_[index];
           annotation = originalSelectedAnnotations_.at(position);
-          annotation.start += delta;
-          if (hasEndpointHandles(annotation.kind))
-            annotation.end += delta;
-          if (isStrokeKind(annotation.kind)) {
-            for (QPointF &strokePoint : annotation.points)
-              strokePoint += delta;
-          }
+          translateAnnotation(annotation, delta);
         }
         dragChanged_ = true;
       } else {
@@ -4477,12 +4518,22 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
                   ? std::max<qreal>(0.05, (point.y() - originalBounds.top()) /
                                               originalBounds.height())
                   : 1.0;
-          for (int index = 0; index < annotation.points.size(); ++index) {
-            const QPointF relative =
-                originalAnnotation_.points.at(index) - originalBounds.topLeft();
-            annotation.points[index] =
-                originalBounds.topLeft() +
-                QPointF(relative.x() * scaleX, relative.y() * scaleY);
+          const auto resizePoints = [&](QVector<QPointF> &resized,
+                                        const QVector<QPointF> &source) {
+            resized.resize(source.size());
+            for (qsizetype index = 0; index < source.size(); ++index) {
+              const QPointF relative =
+                  source.at(index) - originalBounds.topLeft();
+              resized[index] =
+                  originalBounds.topLeft() +
+                  QPointF(relative.x() * scaleX, relative.y() * scaleY);
+            }
+          };
+          resizePoints(annotation.points, originalAnnotation_.points);
+          resizePoints(annotation.rawPoints, originalAnnotation_.rawPoints);
+          if (!annotation.points.isEmpty()) {
+            annotation.start = annotation.points.first();
+            annotation.end = annotation.points.last();
           }
         } else if (annotation.kind == Annotation::Kind::Marker) {
           annotation.size = std::clamp(
@@ -4554,9 +4605,12 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       QPointF point = toUnclampedAnnotationPoint(cursor_);
       if (tool_ == Tool::Highlighter && highlighterLock_)
         point.setY(highlighterLock_->centerY);
+      const QPointF filtered = tool_ == Tool::Freehand
+                                   ? freehandInputSmoother_.update(point)
+                                   : point;
       if (freehandPoints_.isEmpty() ||
-          QLineF(freehandPoints_.last(), point).length() >= 1.5)
-        freehandPoints_.push_back(point);
+          QLineF(freehandPoints_.last(), filtered).length() >= 1.5)
+        freehandPoints_.push_back(filtered);
     }
     bool overPaletteAnchor = false;
     bool overCustomAnchor = false;
@@ -5020,6 +5074,8 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
         highlighterLock_ = highlighterPreview_;
       if (highlighterLock_)
         strokeStart.setY(highlighterLock_->centerY);
+      if (tool_ == Tool::Freehand)
+        freehandInputSmoother_.reset();
       freehandPoints_.push_back(strokeStart);
       if (tool_ == Tool::Highlighter)
         updatePointerCursor();
@@ -5171,8 +5227,21 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
   creationConstraintActive_ = false;
   creationCenteredActive_ = false;
   if (tool_ == Tool::Freehand || tool_ == Tool::Highlighter) {
-    if (freehandPoints_.isEmpty() ||
-        QLineF(freehandPoints_.last(), end).length() >= 1.0)
+    if (tool_ == Tool::Freehand) {
+      if (freehandPoints_.isEmpty())
+        freehandPoints_.push_back(end);
+      else if (freehandPoints_.size() == 1 ||
+               QLineF(freehandPoints_.last(), end).length() >= 0.001)
+        freehandPoints_.push_back(end);
+      else
+        freehandPoints_.last() = end;
+      // Live smoothing intentionally trails slow input. The post-stroke pass
+      // starts from that cleaner trace, but the visible gesture must still
+      // begin and finish exactly under the pointer.
+      freehandPoints_.first() = dragStart_;
+      freehandPoints_.last() = end;
+    } else if (freehandPoints_.isEmpty() ||
+               QLineF(freehandPoints_.last(), end).length() >= 1.0)
       freehandPoints_.push_back(end);
     qreal length = 0;
     for (int index = 1; index < freehandPoints_.size(); ++index)
@@ -5189,11 +5258,24 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
       annotation.size = highlighter && highlighterLock_
                             ? highlighterLock_->annotationSize
                             : annotationSize_;
-      annotation.points = std::move(freehandPoints_);
+      if (highlighter) {
+        annotation.points = std::move(freehandPoints_);
+      } else {
+        annotation.rawPoints = std::move(freehandPoints_);
+        annotation.smoothingLevel = freehandSmoothingLevel_;
+        annotation.points = stroke::smoothFreehand(annotation.rawPoints,
+                                                    annotation.smoothingLevel);
+        annotation.start = annotation.points.first();
+        annotation.end = annotation.points.last();
+      }
       selectedAnnotation_ = -1;
-      setStatus(highlighter ? highlighterStatus()
-                            : QStringLiteral("Stroke added · Esc for select "
-                                             "mode"));
+      setStatus(
+          highlighter
+              ? highlighterStatus()
+              : QStringLiteral("Stroke added · smoothing %1/%2 · Esc for "
+                               "select mode")
+                    .arg(annotation.smoothingLevel)
+                    .arg(stroke::maximumSmoothingLevel));
       commitAnnotate(std::move(annotation));
     }
     freehandPoints_.clear();
@@ -5382,6 +5464,13 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
                   .arg(annotationTextFontName(textFont_))
                   .arg(QString::fromLatin1(kTextSizeNames.at(
                       static_cast<std::size_t>(textSizeIndex_)))));
+  } else if (tool_ == Tool::Freehand &&
+             modifiers.testFlag(Qt::AltModifier)) {
+    freehandSmoothingLevel_ =
+        std::clamp(freehandSmoothingLevel_ + step,
+                   stroke::minimumSmoothingLevel,
+                   stroke::maximumSmoothingLevel);
+    setStatus(toolStatus());
   } else if (tool_ == Tool::Spotlight &&
              event->modifiers().testFlag(Qt::AltModifier)) {
     // Alt+wheel is the spotlight's secondary control: the ring around the
@@ -6992,6 +7081,12 @@ void CaptureEditor::paintEdit(QPainter &painter) {
           tooltip = QStringLiteral("Ellipse · %1 · Size %2 · Scroll wheel")
                         .arg(fillName(fillShapes_))
                         .arg(qRound(annotationSize_));
+        } else if (tool_ == Tool::Freehand) {
+          tooltip = QStringLiteral("Size %1 · Scroll wheel · Smoothing %2/%3 "
+                                   "· Alt+Wheel")
+                        .arg(qRound(annotationSize_))
+                        .arg(freehandSmoothingLevel_)
+                        .arg(stroke::maximumSmoothingLevel);
         } else {
           tooltip = QStringLiteral("Size %1 · Scroll wheel")
                         .arg(qRound(annotationSize_));

@@ -71,6 +71,8 @@ add_library(fomosnap-core STATIC
   src/auto-capture.hpp
   src/startup-timing.cpp
   src/startup-timing.hpp
+  src/stroke-smoothing.cpp
+  src/stroke-smoothing.hpp
   src/editor.cpp
   src/editor.hpp
   ${FOMOSNAP_MAC_SOURCES}
@@ -177,6 +179,8 @@ qt_add_executable(fomosnap-smoke
   tests/cut-mapping-smoke.hpp
   tests/palette-config-smoke.cpp
   tests/palette-config-smoke.hpp
+  tests/stroke-smoothing-smoke.cpp
+  tests/stroke-smoothing-smoke.hpp
   tests/pin-lifecycle-smoke.cpp
   tests/pin-lifecycle-smoke.hpp
   tests/pin-layout-smoke.cpp
