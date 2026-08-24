@@ -1,4 +1,5 @@
 build/
 stage/
+.cache/
 *.tar.gz
 .DS_Store

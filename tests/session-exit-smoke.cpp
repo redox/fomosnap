@@ -3,8 +3,8 @@
  *  teardown that deadlocks or a window that outlives its application, so
  *  these drive the real executable and insist it exits within a deadline.
  *
- *  Each child gets its own HOME, so its runtime directory and single-instance
- *  lock are private to the check and cannot disturb a running FOMOsnap. */
+ *  Each child gets its own HOME and FOMOSNAP_TEST_MONITOR, so runtime locks
+ *  stay under that home and cannot collide with a resident agent. */
 #include "session-exit-smoke.hpp"
 
 #include <QDir>

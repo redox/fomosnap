@@ -244,6 +244,10 @@ void fillMonitor(MonitorInfo &monitor, SCDisplay *display) {
 namespace mac {
 
 bool ensureScreenRecordingAccess(QString &error) {
+  // Headless tests describe the display and supply pixels; they must not
+  // raise the system prompt or depend on a TCC grant.
+  if (!qEnvironmentVariable("FOMOSNAP_TEST_MONITOR").isEmpty())
+    return true;
   if (CGPreflightScreenCaptureAccess())
     return true;
   // This raises the system prompt and returns immediately; the permission

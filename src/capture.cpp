@@ -113,13 +113,21 @@ bool ensurePrivateDirectory(const QString &path) {
 }
 
 QString secureRuntimeDirectory() {
-  QString runtime =
-      QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
-  if (runtime.isEmpty()) {
-    runtime = QDir(QDir::tempPath())
-                  .filePath(QStringLiteral("fomosnap-%1").arg(::getuid()));
+  QString runtime;
+  // Headless tests give each child its own HOME. Keep locks and temp files
+  // under that home so a resident agent on the real account cannot collide.
+  if (!qEnvironmentVariable("FOMOSNAP_TEST_MONITOR").isEmpty()) {
+    runtime = QDir(QStandardPaths::writableLocation(QStandardPaths::HomeLocation))
+                  .filePath(QStringLiteral(".cache/fomosnap"));
   } else {
-    runtime = QDir(runtime).filePath(QStringLiteral("fomosnap"));
+    runtime =
+        QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (runtime.isEmpty()) {
+      runtime = QDir(QDir::tempPath())
+                    .filePath(QStringLiteral("fomosnap-%1").arg(::getuid()));
+    } else {
+      runtime = QDir(runtime).filePath(QStringLiteral("fomosnap"));
+    }
   }
   return ensurePrivateDirectory(runtime) ? QDir::cleanPath(runtime) : QString();
 }

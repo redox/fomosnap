@@ -77,6 +77,9 @@ capture overlay.
 
 Headless tests never touch either: `FOMOSNAP_TEST_MONITOR` describes a display
 (`name:x,y,width,height@scale`) and `FOMOSNAP_TEST_CAPTURE` supplies its pixels.
+When that monitor variable is set, runtime locks and temp files live under the
+process `HOME` (`.cache/fomosnap`), so `make check` stays isolated from a
+resident agent on the same account.
 
 ## Build and verify
 
