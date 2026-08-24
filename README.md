@@ -112,36 +112,25 @@ indefinitely.
 
 ```bash
 brew tap redox/tap
-brew install fomosnap
+brew install --cask fomosnap
 ```
 
-That builds the latest tagged release. To track `main` instead, use
-`brew install --HEAD fomosnap` — and note that upgrading a `--HEAD` install
-needs `--fetch-HEAD`, or Homebrew reuses its cached clone and rebuilds the same
-commit:
+The cask installs the latest tagged, prebuilt app. Upgrade it with:
 
 ```bash
-brew upgrade --fetch-HEAD fomosnap
+brew upgrade --cask fomosnap
 ```
 
-The formula builds against Homebrew's Qt rather than bundling it, and links the
-executable inside the bundle as `fomosnap`. Always launch it through that
-symlink or the bundle itself: Screen Recording is granted to the bundle's
-identity, and a binary copied out of it has none.
-
-The first `brew install fomosnap` installs and starts the resident agent. On
-later upgrades, Homebrew reloads the agent if it is still installed, so the
-new binary takes effect immediately. If you ran `fomosnap --uninstall-agent`,
+The first cask install installs and starts the resident agent. On later
+upgrades, the cask reloads the agent if it is still installed, so the new
+binary takes effect immediately. If you ran `fomosnap --uninstall-agent`,
 upgrades preserve that choice; run `fomosnap --install-agent` to enable it again.
 
-Homebrew keeps the app in its own prefix rather than `/Applications`. To get it
-into Launchpad and Spotlight:
+The cask installs `FOMOsnap.app` in `/Applications` and provides the `fomosnap`
+command through a wrapper that still launches the executable inside the bundle.
+Screen Recording is granted to the bundle identity, not to a copied binary.
 
-```bash
-ln -sfn "$(brew --prefix fomosnap)/FOMOsnap.app" /Applications/FOMOsnap.app
-```
-
-The formula lives in `packaging/homebrew/fomosnap.rb`; the tap holds a copy.
+The cask is defined in `packaging/homebrew/fomosnap.rb`; the tap holds a copy.
 
 ### From source
 
@@ -205,8 +194,9 @@ Two details that are load-bearing rather than incidental:
   launchd accepts the registration and then refuses to spawn it, failing with
   `EX_CONFIG`. A plain LaunchAgent works from any location.
 
-After a Homebrew upgrade the plist still points at `$(brew --prefix fomosnap)`,
-a stable symlink, so the login item survives version changes.
+After a Homebrew upgrade the cask reloads the LaunchAgent with the new
+`/Applications/FOMOsnap.app` executable, so the login item survives version
+changes and the running agent is refreshed.
 
 Prefer your own launcher? Skip the agent entirely and bind `fomosnap` in Raycast,
 Shortcuts, or Karabiner. Every capture is a normal process launch.

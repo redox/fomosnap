@@ -35,7 +35,12 @@ jobs:
           archive="fomosnap-${version}-macos-arm64.tar.gz"
           echo "CAPTURE_ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "CAPTURE_ARTIFACT=${archive%.tar.gz}" >> "$GITHUB_ENV"
-          tar -C stage -czf "$archive" FOMOsnap.app
+          cat > stage/fomosnap <<'SH'
+          #!/bin/bash
+          exec "/Applications/FOMOsnap.app/Contents/MacOS/FOMOsnap" "$@"
+          SH
+          chmod 0755 stage/fomosnap
+          tar -C stage -czf "$archive" FOMOsnap.app fomosnap
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
