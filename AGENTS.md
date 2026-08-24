@@ -120,11 +120,11 @@ have already bitten once each:
 2. Build and run `make check`.
 3. Commit, tag `v<version>`, push main and the tag. The GitHub workflow
    attaches the bundle to the release automatically.
-4. After the tag tarball exists, update `url` and `sha256` in
-   `packaging/homebrew/fomosnap.rb` (`shasum -a 256` of
-   `https://github.com/redox/fomosnap/archive/refs/tags/v<version>.tar.gz`),
-   commit that, and copy the formula to
-   [redox/homebrew-tap](https://github.com/redox/homebrew-tap/blob/main/Formula/fomosnap.rb).
+4. After the tagged app archive exists, update `version`, `url`, and `sha256`
+   in `packaging/homebrew/fomosnap.rb` (`shasum -a 256` of
+   `https://github.com/redox/fomosnap/releases/download/v<version>/fomosnap-<version>-macos-arm64.tar.gz`),
+   commit that, and copy the cask to
+   [redox/homebrew-tap](https://github.com/redox/homebrew-tap/blob/main/Casks/fomosnap.rb).
 
 See `README.md` for user-facing features, keybindings, and install
 instructions — keep it in sync when behavior changes.
