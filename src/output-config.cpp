@@ -56,6 +56,8 @@ QString formatScreenshotFilename(const QString &pattern, const QDateTime &when,
 }
 
 QString defaultConfigPath() {
-  return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
-         QStringLiteral("/fomosnap/fomosnap.conf");
+  if (QStandardPaths::isTestModeEnabled())
+    return QStandardPaths::writableLocation(QStandardPaths::ConfigLocation) +
+           QStringLiteral("/fomosnap/fomosnap.conf");
+  return QDir::homePath() + QStringLiteral("/.config/fomosnap/fomosnap.conf");
 }

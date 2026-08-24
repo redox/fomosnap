@@ -77,6 +77,9 @@ capture overlay.
 
 Headless tests never touch either: `FOMOSNAP_TEST_MONITOR` describes a display
 (`name:x,y,width,height@scale`) and `FOMOSNAP_TEST_CAPTURE` supplies its pixels.
+When that monitor variable is set, runtime locks and temp files live under the
+process `HOME` (`.cache/fomosnap`), so `make check` stays isolated from a
+resident agent on the same account.
 
 ## Build and verify
 
@@ -117,6 +120,11 @@ have already bitten once each:
 2. Build and run `make check`.
 3. Commit, tag `v<version>`, push main and the tag. The GitHub workflow
    attaches the bundle to the release automatically.
+4. After the tag tarball exists, update `url` and `sha256` in
+   `packaging/homebrew/fomosnap.rb` (`shasum -a 256` of
+   `https://github.com/redox/fomosnap/archive/refs/tags/v<version>.tar.gz`),
+   commit that, and copy the formula to
+   [redox/homebrew-tap](https://github.com/redox/homebrew-tap/blob/main/Formula/fomosnap.rb).
 
 See `README.md` for user-facing features, keybindings, and install
 instructions — keep it in sync when behavior changes.
