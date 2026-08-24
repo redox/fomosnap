@@ -74,7 +74,10 @@ add_library(fomosnap-core STATIC
 qt_add_resources(fomosnap-core "capture-fonts"
   PREFIX "/fonts"
   BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-  FILES "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
+  FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/Neucha.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/JetBrainsMono-Regular.ttf"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/InterDisplay-SemiBold.ttf"
 )
 
 # Objective-C++ only; the plain C++ translation units never see an Apple

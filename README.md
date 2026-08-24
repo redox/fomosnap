@@ -29,8 +29,8 @@ global hotkey were rewritten against macOS frameworks.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
 - Arrows, straight lines, smoothed freehand strokes, translucent highlighter strokes,
   hollow or filled rectangles (optionally rounded) and ellipses, numbered markers,
-  editable Neucha text (on a readability pill), and secure redaction with opaque or
-  randomized non-spatial mosaic output.
+  editable text in Neucha, JetBrains Mono, or Inter Display (on a readability pill),
+  and secure redaction with opaque or randomized non-spatial mosaic output.
 - Per-layer preset or custom colors (including highlighter ink), undo/redo history,
   one-click whole-image or drag-region OCR (the recognized text is shown beside
   the image and copied to the clipboard),
@@ -442,7 +442,8 @@ without reaching for the pointer.
 | `E` | Ellipse; shares the shape submenu and filled/hollow toggle |
 | `D` | Redact; press again to toggle randomized pixelation or solid redaction |
 | `X` | Cut out a band; drag to preview the crossed-out strip, then release to remove and collapse it |
-| `T` | Neucha text on a cream readability pill. Click for a one-line label, or drag a box to give it room for several lines: Enter moves to the next line while there is room and commits on the last one; `Shift+Enter` always adds a line; `Esc` commits too but keeps the label selected, so `Backspace` removes it; clicking away keeps the text; press T again to toggle the pill |
+| `T` | Text on a cream readability pill, with Neucha as the default. Click for a one-line label, or drag a box to give it room for several lines: Enter moves to the next line while there is room and commits on the last one; `Shift+Enter` always adds a line; `Esc` commits too but keeps the label selected, so `Backspace` removes it; clicking away keeps the text; press T again to toggle the pill |
+| `Shift+T` | Cycle the next or selected text through Neucha, JetBrains Mono, and Inter Display |
 | `O` | Recognize and copy all text in the current image |
 | `B` | Cycle backdrop |
 | `1`–`8` | Set annotation color; `7` is black and `8` is white |
@@ -557,5 +558,6 @@ unchanged, which is why the port was possible at all.
 Upstream is where to go for Wayland and Hyprland — this repository will not
 carry a Linux build.
 
-The bundled Neucha font is distributed under the SIL Open Font License; its license is in
-`assets/OFL.txt` and is installed with the application.
+The bundled Neucha, JetBrains Mono, and Inter Display fonts are distributed
+under the SIL Open Font License. Their provenance and hashes are recorded in
+`assets/FONTS.md`; their licenses are installed with the application.

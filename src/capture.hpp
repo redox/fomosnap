@@ -54,6 +54,7 @@ enum class QuickOutputMode { None, Copy, Save, Both };
 enum class SpotlightShape { Ellipse, Rectangle, RoundedRectangle };
 enum class RedactionStyle { Solid, Pixelate };
 enum class TextBackground { Plain, Pill, Outline };
+enum class TextFont { Neucha, JetBrainsMono, InterDisplay };
 
 struct Annotation {
   enum class Kind {
@@ -84,6 +85,8 @@ struct Annotation {
   SpotlightShape spotlightShape = SpotlightShape::Ellipse;
   quint32 redactionSeed = 0;
   TextBackground textBackground = TextBackground::Pill;
+  /// Typeface is a layer property so reopened and duplicated labels keep it.
+  TextFont textFont = TextFont::Neucha;
   quint64 id = 0;
 
   bool operator==(const Annotation &) const = default;
@@ -123,7 +126,11 @@ enum class AnnotationLayer { Redaction, Default };
 }
 
 [[nodiscard]] bool loadCaptureFonts();
-[[nodiscard]] QFont annotationTextFont(qreal size);
+/** User-facing name for a bundled annotation typeface. */
+[[nodiscard]] QString annotationTextFontName(TextFont textFont);
+/** Bundled annotation font at Omasnap's logical text size. */
+[[nodiscard]] QFont annotationTextFont(qreal size,
+                                       TextFont textFont = TextFont::Neucha);
 /**
  * Discovers the focused monitor (name, geometry, scale): the display under
  * the pointer. Safe to call on the main thread before the hotkey frame is
