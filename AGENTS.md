@@ -116,11 +116,15 @@ have already bitten once each:
 
 ## Release process
 
-1. Bump `project(fomosnap VERSION ...)` in `CMakeLists.txt`.
-2. Build and run `make check`.
-3. Commit, tag `v<version>`, push main and the tag. The GitHub workflow
-   attaches the bundle to the release automatically.
-4. After the tagged app archive exists, update `version`, `url`, and `sha256`
+1. Configure the GitHub Actions Developer ID certificate, notarization API key,
+   and `FOMOSNAP_CODESIGN_IDENTITY` repository variable as documented in
+   `README.md`. The tag workflow fails closed if they are missing.
+2. Bump `project(fomosnap VERSION ...)` in `CMakeLists.txt`.
+3. Build and run `make check`.
+4. Commit, tag `v<version>`, push main and the tag. The GitHub workflow signs,
+   notarizes, staples, and verifies the app before attaching the bundle to the
+   release.
+5. After the tagged app archive exists, update `version`, `url`, and `sha256`
    in `packaging/homebrew/fomosnap.rb` (`shasum -a 256` of
    `https://github.com/redox/fomosnap/releases/download/v<version>/fomosnap-<version>-macos-arm64.tar.gz`),
    commit that, and copy the cask to
