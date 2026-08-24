@@ -270,6 +270,61 @@ bool runLoginItemRoundTrip(const QString &home, QString &error) {
   return true;
 }
 
+/// launchctl tears down an old job asynchronously. A replacement bootstrap
+/// can briefly return EIO while that teardown is still in flight, so exercise
+/// the refresh path with a fake launchctl that fails the first bootstrap.
+bool runLoginItemRefresh(const QString &home, QString &error) {
+  const QString fakeLaunchctl =
+      QDir(home).filePath(QStringLiteral("launchctl"));
+  QFile script(fakeLaunchctl);
+  if (!script.open(QIODevice::WriteOnly) ||
+      script.write("#!/bin/sh\n"
+                   "if [ \"$1\" = bootstrap ] && [ ! -e "
+                   "\"$HOME/launchctl-bootstrap-attempted\" ]; then\n"
+                   "  : > \"$HOME/launchctl-bootstrap-attempted\"\n"
+                   "  exit 5\n"
+                   "fi\n"
+                   "exit 0\n") < 0 ||
+      !script.flush() ||
+      !script.setPermissions(QFileDevice::ReadOwner |
+                             QFileDevice::WriteOwner |
+                             QFileDevice::ExeOwner)) {
+    error = QStringLiteral("Could not create the fake launchctl");
+    return false;
+  }
+  script.close();
+
+  QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+  environment.insert(QStringLiteral("HOME"), home);
+  environment.insert(QStringLiteral("QT_QPA_PLATFORM"),
+                     QStringLiteral("offscreen"));
+  environment.insert(QStringLiteral("PATH"),
+                     home + QDir::listSeparator() +
+                         environment.value(QStringLiteral("PATH")));
+
+  int exitCode = -1;
+  if (!runToExit({QStringLiteral("--install-agent")}, environment, exitCode,
+                 error))
+    return false;
+  if (exitCode != 0) {
+    error = QStringLiteral(
+                "--install-agent did not recover from a transient bootstrap "
+                "failure (exit %1)")
+                .arg(exitCode);
+    return false;
+  }
+
+  if (!runToExit({QStringLiteral("--uninstall-agent")}, environment, exitCode,
+                 error))
+    return false;
+  if (exitCode != 0) {
+    error = QStringLiteral("--uninstall-agent after refresh exited %1")
+                .arg(exitCode);
+    return false;
+  }
+  return true;
+}
+
 /// Only one agent may run per user. Carbon delivers a hotkey to every process
 /// that registered it, so a second agent means two overlays open on one press
 /// and the single-instance handover asks the other to give up the screen --
@@ -399,5 +454,6 @@ bool runSessionExitSmoke(QString &error) {
          runAgentSurvivesMissingPermission(environment, error) &&
          runSecondAgentDeclines(environment, error) &&
          runLoginItemRoundTrip(home.path(), error) &&
+         runLoginItemRefresh(home.path(), error) &&
          runUsageErrorExits(environment, error);
 }
