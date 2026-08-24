@@ -1,9 +1,8 @@
 /** @fileoverview Display discovery, window discovery, and pixel capture
  *  through ScreenCaptureKit. Replaces the Wayland `ext-image-copy-capture`
- *  path: a screenshot is one `SCScreenshotManager` call, and the first still
- *  is taken before the overlay window is ever created. Live grabs during
- *  scroll capture omit this process's windows, so the overlay cannot freeze
- *  every crop as its own backing store. */
+ *  path: a screenshot is one `SCScreenshotManager` call. Live grabs omit this
+ *  process's windows, so the overlay cannot freeze every crop as its own
+ *  backing store. */
 
 #include "mac-platform.hpp"
 
@@ -356,8 +355,8 @@ QVector<WindowTarget> windowTargets(const MonitorInfo &monitor) {
 // --- capture.hpp entry points ------------------------------------------------
 
 bool captureOutputSurface(const MonitorInfo &monitor, QImage &image,
-                          QString &error) {
-  return mac::captureDisplay(monitor, image, error);
+                          QString &error, bool excludeOwnWindows) {
+  return mac::captureDisplay(monitor, image, error, excludeOwnWindows);
 }
 
 /// A repeatable capture session for one display. ScreenCaptureKit keeps the

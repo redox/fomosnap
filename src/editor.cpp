@@ -5,6 +5,7 @@
 #include "stitch.hpp"
 #include "icons.hpp"
 #include "eyedropper.hpp"
+#include "mac/mac-platform.hpp"
 #include "output-config.hpp"
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
@@ -679,8 +680,17 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
           [this] {
             capturePending_ = false;
             const CaptureJob job = captureWatcher_.result();
+            const bool selectionCapture = captureForSelection_;
+            captureForSelection_ = false;
             if (!job.ok) {
-              setStatus(QStringLiteral("Screen capture failed"));
+              captureStarted_ = false;
+              if (selectionCapture) {
+                windowMode_ = pendingMode_ == CaptureMode::Window;
+                if (windowMode_)
+                  selection_ = {};
+              }
+              setStatus(QStringLiteral("Screen capture failed: %1")
+                            .arg(job.error));
               emit captureReady(false, job.error);
               update();
               return;
@@ -691,6 +701,26 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             pristineLogicalSize_ = capture_.previewSize;
             cuts_.clear();
             redactionBaseStale_ = true;
+            if (selectionCapture) {
+              switch (pendingMode_) {
+              case CaptureMode::Window:
+                editedKind_ = SelectTab::Window;
+                break;
+              case CaptureMode::Fullscreen:
+                editedKind_ = SelectTab::Fullscreen;
+                break;
+              case CaptureMode::Region:
+              case CaptureMode::Scroll:
+              case CaptureMode::File:
+                editedKind_ = SelectTab::Region;
+                break;
+              }
+              const QString status = pendingEditStatus_;
+              pendingEditStatus_.clear();
+              enterEdit(status);
+              emit captureReady(true, {});
+              return;
+            }
             switch (pendingMode_) {
             case CaptureMode::Fullscreen:
               selection_ = QRectF(QPointF(), capture_.previewSize);
@@ -747,12 +777,34 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
 
   captureMode_ = mode;
   liveMonitor_ = capture_.monitor;
+  liveSelection_ = capture_.source.isNull() && mode != CaptureMode::File;
+  if (liveSelection_ && capture_.previewSize.isEmpty())
+    capture_.previewSize = capture_.monitor.geometry.size();
   if (capture_.source.isNull()) {
-    // The pixel capture has not landed yet; the overlay shows a Capturing…
-    // state until startCapture() completes.
-    capturePending_ = true;
-    pendingMode_ = mode;
-    setStatus(QStringLiteral("Capturing screen…"));
+    // Interactive screen selection starts with only monitor metadata, so the
+    // desktop remains visible until the user commits a selection.
+    switch (mode) {
+    case CaptureMode::Window:
+      windowMode_ = true;
+      setStatus(QStringLiteral(
+          "Window mode · click or Super+Arrows then Enter · Space returns to "
+          "area"));
+      break;
+    case CaptureMode::Scroll:
+      scrollMode_ = true;
+      setStatus(QStringLiteral(
+          "Drag to select a scrolling region · the page inside stays live"));
+      break;
+    case CaptureMode::Region:
+      setStatus(
+          QStringLiteral("Drag to select an area · Space selects a window"));
+      break;
+    case CaptureMode::Fullscreen:
+      setStatus(QStringLiteral("Capturing screen…"));
+      break;
+    case CaptureMode::File:
+      break;
+    }
   } else if (mode == CaptureMode::Fullscreen || mode == CaptureMode::File) {
     editedKind_ = SelectTab::Fullscreen;
     if (ops_.isEmpty())
@@ -1837,12 +1889,17 @@ bool CaptureEditor::selectedLayerAcceptsPoint(const QPointF &point) const {
 }
 
 QRectF CaptureEditor::sourceRect(const QRectF &logicalRect) const {
-  if (capture_.source.isNull() || capture_.previewSize.isEmpty())
+  if (capture_.previewSize.isEmpty())
+    return {};
+  const QSize sourceSize = capture_.source.isNull()
+                               ? capture_.monitor.pixelSize
+                               : capture_.source.size();
+  if (sourceSize.isEmpty())
     return {};
   const qreal scaleX =
-      capture_.source.width() / static_cast<qreal>(capture_.previewSize.width());
+      sourceSize.width() / static_cast<qreal>(capture_.previewSize.width());
   const qreal scaleY =
-      capture_.source.height() / static_cast<qreal>(capture_.previewSize.height());
+      sourceSize.height() / static_cast<qreal>(capture_.previewSize.height());
   return {logicalRect.x() * scaleX, logicalRect.y() * scaleY,
           logicalRect.width() * scaleX, logicalRect.height() * scaleY};
 }
@@ -1874,7 +1931,7 @@ QRectF CaptureEditor::mapPreviewToWidget(const QRectF &previewRect) const {
 }
 
 QString CaptureEditor::measurementText() const {
-  if (capture_.source.isNull())
+  if (capture_.previewSize.isEmpty())
     return {};
   if (phase_ == Phase::Select) {
     if (windowMode_) {
@@ -2453,20 +2510,24 @@ void CaptureEditor::pinSnapshot() {
       }));
 }
 
-void CaptureEditor::startCapture(CaptureMode mode, bool includeWindows) {
+void CaptureEditor::startCapture(CaptureMode mode, bool includeWindows,
+                                 bool excludeOwnWindows) {
   if (captureStarted_ || !capture_.source.isNull())
     return;
   captureStarted_ = true;
   capturePending_ = true;
   pendingMode_ = mode;
+  if (captureForSelection_)
+    setStatus(QStringLiteral("Capturing selection…"));
   const MonitorInfo monitor = capture_.monitor;
-  captureWatcher_.setFuture(QtConcurrent::run([monitor, includeWindows] {
-    CaptureJob job;
-    job.capture.monitor = monitor;
-    job.ok =
-        captureMonitorPixels(monitor, job.capture, includeWindows, job.error);
-    return job;
-  }));
+  captureWatcher_.setFuture(
+      QtConcurrent::run([monitor, includeWindows, excludeOwnWindows] {
+        CaptureJob job;
+        job.capture.monitor = monitor;
+        job.ok = captureMonitorPixels(monitor, job.capture, includeWindows,
+                                       job.error, excludeOwnWindows);
+        return job;
+      }));
 }
 
 void CaptureEditor::enterEdit(QString status) {
@@ -2561,6 +2622,13 @@ void CaptureEditor::chooseWindow(int index) {
   redactionBaseStale_ = true;
   windowMode_ = false;
   editedKind_ = SelectTab::Window;
+  if (liveSelection_) {
+    captureSelectionForEdit(
+        CaptureMode::Window,
+        QStringLiteral("Window selected · Select moves layers · wheel zooms · "
+                       "outer handles crop"));
+    return;
+  }
   enterEdit(QStringLiteral(
       "Window selected · Select moves layers · wheel zooms · outer handles "
       "crop"));
@@ -4573,7 +4641,8 @@ void CaptureEditor::refreshBackdropCache() {
 QVector<CaptureTab> CaptureEditor::selectTabItems() const {
   // In the edit phase the strip stays as the way back: a tab there returns
   // to the select phase in that mode. A file has no screen to go back to.
-  if (capture_.source.isNull() || (phase_ == Phase::Edit && !hasLiveScreen()))
+  if ((capture_.source.isNull() && !liveSelection_) ||
+      (phase_ == Phase::Edit && !hasLiveScreen()))
     return {};
   return captureTabLayout(chromeBounds());
 }
@@ -4648,7 +4717,18 @@ void CaptureEditor::commitRegion(const QRectF &region,
     return;
   }
   editedKind_ = SelectTab::Region;
+  if (liveSelection_) {
+    captureSelectionForEdit(CaptureMode::Region, editStatus);
+    return;
+  }
   enterEdit(editStatus);
+}
+
+void CaptureEditor::captureSelectionForEdit(CaptureMode mode, QString status) {
+  captureForSelection_ = true;
+  pendingEditStatus_ = std::move(status);
+  pendingMode_ = mode;
+  startCapture(mode, false, true);
 }
 
 void CaptureEditor::startScrollCapture(const QRect &region) {
@@ -4747,6 +4827,7 @@ void CaptureEditor::adoptImage(QImage image, OperationLog log, SelectTab kind,
   windowMode_ = false;
   hoveredWindow_ = -1;
   handedImage_ = true;
+  liveSelection_ = hasLiveScreen();
   editedKind_ = kind;
   selectedAnnotation_ = -1;
   selectedAnnotations_.clear();
@@ -4781,15 +4862,20 @@ void CaptureEditor::returnToSelect(bool windowMode) {
   ops_.clear();
   opIndex_ = 0;
   replayLog();
-  if (handedImage_) {
-    // A stitched result is not the screen; take the monitor again so the
-    // frozen backdrop behind the next selection is current.
+  if (liveSelection_ || handedImage_) {
+    // Selection always returns to the live desktop. The next choice captures
+    // a fresh frame instead of reviving the image that was just edited.
     handedImage_ = false;
     capture_ = CaptureData();
     capture_.monitor = liveMonitor_;
+    capture_.previewSize = liveMonitor_.geometry.size();
+    capture_.windows = mac::windowTargets(liveMonitor_);
     pristineSource_ = {};
     captureStarted_ = false;
-    startCapture(windowMode ? CaptureMode::Window : CaptureMode::Region, true);
+    capturePending_ = false;
+    captureForSelection_ = false;
+    pendingEditStatus_.clear();
+    liveSelection_ = true;
   }
   phase_ = Phase::Select;
   tool_ = Tool::Select;
@@ -5096,6 +5182,13 @@ void CaptureEditor::selectFullscreen() {
   hoveredWindow_ = -1;
   selection_ = QRectF(QPointF(), capture_.previewSize);
   editedKind_ = SelectTab::Fullscreen;
+  if (liveSelection_) {
+    captureSelectionForEdit(
+        CaptureMode::Fullscreen,
+        QStringLiteral("Full screen selected · native resolution · outer "
+                       "handles crop"));
+    return;
+  }
   enterEdit(QStringLiteral(
       "Full screen selected · native resolution · outer handles crop"));
   update();
@@ -5110,27 +5203,38 @@ void CaptureEditor::paintSelectTabs(QPainter &painter) {
 }
 
 void CaptureEditor::paintSelect(QPainter &painter) {
-  if (capture_.source.isNull()) {
-    painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
-    drawStatusPill(painter, rect(), status_);
-    return;
-  }
-  refreshBackdropCache();
-  painter.drawPixmap(rect(), dimmedBackdrop_);
-
   const bool haveHole =
       windowMode_ ? hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()
                   : !selection_.isEmpty();
+  QRectF previewHole;
+  QRectF destHole;
   if (haveHole) {
-    const QRectF previewHole =
-        windowMode_ ? QRectF(capture_.windows.at(hoveredWindow_).rect)
-                    : mapWidgetToPreview(selection_);
-    const QRectF destHole =
-        windowMode_ ? mapPreviewToWidget(previewHole) : selection_;
-    painter.save();
-    painter.setClipRect(destHole, Qt::IntersectClip);
-    painter.drawImage(destHole, capture_.source, sourceRect(previewHole));
-    painter.restore();
+    previewHole = windowMode_ ? QRectF(capture_.windows.at(hoveredWindow_).rect)
+                              : mapWidgetToPreview(selection_);
+    destHole = windowMode_ ? mapPreviewToWidget(previewHole) : selection_;
+  }
+
+  painter.setCompositionMode(QPainter::CompositionMode_Source);
+  if (capture_.source.isNull()) {
+    // The selection phase is a translucent scrim over the live desktop. A
+    // committed choice is captured later, so no stale full-screen image is
+    // painted here.
+    painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
+    if (haveHole)
+      painter.fillRect(destHole, Qt::transparent);
+  } else {
+    refreshBackdropCache();
+    painter.drawPixmap(rect(), dimmedBackdrop_);
+  }
+  painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+
+  if (haveHole) {
+    if (!capture_.source.isNull()) {
+      painter.save();
+      painter.setClipRect(destHole, Qt::IntersectClip);
+      painter.drawImage(destHole, capture_.source, sourceRect(previewHole));
+      painter.restore();
+    }
   }
 
   if (windowMode_) {

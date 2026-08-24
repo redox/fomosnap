@@ -329,19 +329,22 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
     return 1;
   }
 
-  // Grab the display before the overlay window exists. Nothing about
-  // ScreenCaptureKit would stop us photographing our own window, so the
-  // ordering is what keeps the overlay out of its own screenshot.
   const bool instantFullscreenOutput =
       !options.editingImage &&
       captureMode == CaptureEditor::CaptureMode::Fullscreen &&
       options.quickOutputMode != QuickOutputMode::None;
-  if (!options.editingImage &&
-      !captureMonitorPixels(capture.monitor, capture, !instantFullscreenOutput,
-                            error)) {
-    qCritical().noquote() << error;
-    sendCaptureNotification(QStringLiteral("Screenshot failed: %1").arg(error));
-    return 1;
+  if (instantFullscreenOutput) {
+    if (!captureMonitorPixels(capture.monitor, capture, false, error)) {
+      qCritical().noquote() << error;
+      sendCaptureNotification(
+          QStringLiteral("Screenshot failed: %1").arg(error));
+      return 1;
+    }
+  } else if (!options.editingImage) {
+    // The selection surface starts with metadata only. Its translucent scrim
+    // shows the live desktop, and the pixels arrive after a choice is made.
+    capture.previewSize = capture.monitor.geometry.size();
+    capture.windows = mac::windowTargets(capture.monitor);
   }
 
   if (instantFullscreenOutput) {
@@ -374,7 +377,7 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
 
   if (!options.editingImage) {
     qInfo().noquote()
-        << QStringLiteral("Captured %1 with %2 selectable windows")
+        << QStringLiteral("Ready to select on %1 with %2 selectable windows")
                .arg(capture.monitor.name)
                .arg(capture.windows.size());
   }
@@ -406,6 +409,9 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
   editor->show();
   macwindow::activate(window);
   editor->setFocus(Qt::ActiveWindowFocusReason);
+  if (!options.editingImage && !instantFullscreenOutput &&
+      captureMode == CaptureEditor::CaptureMode::Fullscreen)
+    editor->startCapture(CaptureEditor::CaptureMode::Fullscreen, false, true);
 
   if (watchForClose) {
     auto *watcher = new CloseWatcher(editor.get(), [this] { stop(); });

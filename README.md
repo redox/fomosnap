@@ -51,6 +51,9 @@ global hotkey were rewritten against macOS frameworks.
 - A recents shelf: the select overlay stacks small cards of the last five captures
   along the right edge; hover to fan them out, click one to reopen it in the editor
   with its layers still editable instead of taking a new screenshot.
+- A live selection surface: the desktop keeps updating under the dimmed overlay
+  while FOMOsnap retains keyboard and pointer input; the selected image freezes
+  only when the region, window, or display is committed.
 - Correct native-pixel export on fractional or integer-scaled monitors.
 
 ## Platform scope
@@ -399,7 +402,8 @@ tesseract codes (`eng`, `deu`, `jpn`) for the common languages. Defaults to
 
 ### Capture selection
 
-Tabs across the top of the overlay switch the capture kind: **Region**,
+The desktop remains live under the dimmed selection overlay while FOMOsnap owns
+input. Tabs across the top of the overlay switch the capture kind: **Region**,
 **Scrolling Region**, **Window**, **Fullscreen**. All four are modes of the
 same overlay. Scrolling Region selects exactly like Region; once the region is
 drawn, the page inside it goes live and the scroll controls appear in place.
