@@ -306,7 +306,7 @@ File URLs are accepted too. A saved capture notification's "Click to edit" actio
 
 Every capture finished from the editor (copied, saved, or both) keeps its working
 document, source plus operation log, on a shelf of the five most recent under
-`~/Library/Application Support/fomosnap/recent/` (`FOMOSNAP_RECENT_DIR` overrides). The select
+`~/Library/Preferences/FOMOsnap/fomosnap/State/recent/` (`FOMOSNAP_RECENT_DIR` overrides). The select
 overlay shows them as a small stack of cards on the right; hovering fans them out
 and clicking one reopens that capture in the editor, undo history intact, in place
 of a new screenshot. Finishing a reopened capture replaces its shelf entry.

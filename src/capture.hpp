@@ -145,6 +145,11 @@ enum class AnnotationLayer { Redaction, Default };
 /** Bounds of a text layer's glyph box, or of its readability pill when it
  *  has one; `start` is the baseline origin. */
 [[nodiscard]] QRectF annotationTextBounds(const Annotation &annotation);
+/** Same pill as `annotationTextBounds`, but for a live editor whose font and
+ *  glyph origin are already in widget pixels. */
+[[nodiscard]] QRectF textLabelBounds(const QFont &font, const QString &text,
+                                     const QPointF &glyphTopLeft,
+                                     TextBackground background);
 /** A repeatable capture session for one display (`MonitorInfo::name`): open
  *  once, then grab frames repeatedly. A scroll capture takes many per second
  *  and must not pay a process spawn for each. Frames are captured without the

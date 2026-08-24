@@ -33,6 +33,7 @@
 #include <QPlainTextEdit>
 #include <QPixmap>
 #include <QScrollBar>
+#include <QTextCursor>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QWheelEvent>
@@ -993,6 +994,14 @@ bool runQuickOutputChecks(QString &error) {
  * and end with the slug of the app under the selection when one is known.
  */
 bool runScreenshotFilenameChecks(QString &error) {
+  const QString expectedConfig =
+      QDir::homePath() + QStringLiteral("/.config/fomosnap/fomosnap.conf");
+  if (defaultConfigPath() != expectedConfig) {
+    error = QStringLiteral("defaultConfigPath() = %1, expected %2")
+                .arg(defaultConfigPath(), expectedConfig);
+    return false;
+  }
+
   const struct {
     const char *appClass;
     const char *slug;
@@ -4178,6 +4187,115 @@ bool runTextPillRenderingCheck(QString &error) {
   return true;
 }
 
+QRect colorBounds(const QImage &image, const QColor &color) {
+  int minX = image.width();
+  int minY = image.height();
+  int maxX = -1;
+  int maxY = -1;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      if (image.pixelColor(x, y) != color)
+        continue;
+      minX = std::min(minX, x);
+      minY = std::min(minY, y);
+      maxX = std::max(maxX, x);
+      maxY = std::max(maxY, y);
+    }
+  }
+  return maxX < 0 ? QRect() : QRect(QPoint(minX, minY), QPoint(maxX, maxY));
+}
+
+/** The live cream box must hug the glyphs the same way the committed pill does.
+ *  Painting the QPlainTextEdit's tall line box makes the letters sit high and
+ *  left while typing, then jump into place on commit. */
+bool runLiveTextPillCenteringSmoke(QApplication &application, QString &error) {
+  error = QStringLiteral("Live text pill centering check failed");
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      QPoint(700, 500));
+  application.processEvents();
+
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 300));
+  application.processEvents();
+  auto *inlineEditor =
+      qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+  if (inlineEditor == nullptr) {
+    error = QStringLiteral("Text tool did not open the inline editor");
+    return false;
+  }
+  QTest::keyClicks(inlineEditor, QStringLiteral("Hello"));
+  application.processEvents();
+  if (inlineEditor->toPlainText() != QStringLiteral("Hello")) {
+    error = QStringLiteral("Inline editor did not receive the typed text");
+    return false;
+  }
+
+  const QImage ui = editor.grab().toImage();
+  const qreal dpr = ui.width() / qreal(std::max(1, editor.width()));
+  const QRect cream = colorBounds(ui, QColor(248, 245, 235));
+  if (cream.isEmpty()) {
+    error = QStringLiteral("Live text edit did not paint a cream pill");
+    return false;
+  }
+
+  const QFontMetricsF metrics(inlineEditor->font());
+  QTextCursor start(inlineEditor->document());
+  start.setPosition(0);
+  const QRectF glyphTopLeft =
+      QRectF(inlineEditor->cursorRect(start))
+          .translated(inlineEditor->geometry().topLeft() +
+                      inlineEditor->viewport()->pos());
+  const QRectF glyphs(glyphTopLeft.x(), glyphTopLeft.y(),
+                      metrics.horizontalAdvance(QStringLiteral("Hello")),
+                      metrics.height());
+  const qreal pad = std::max<qreal>(4.0, metrics.height() * 0.18);
+  const qreal bottom = std::max(pad, metrics.descent() + 2.0);
+  const QRectF want =
+      glyphs.adjusted(-pad, -pad, pad, bottom - metrics.descent());
+  const QRectF creamLogical(cream.x() / dpr, cream.y() / dpr,
+                            cream.width() / dpr, cream.height() / dpr);
+
+  const qreal left = glyphs.left() - creamLogical.left();
+  const qreal right = creamLogical.right() - glyphs.right();
+  const qreal top = glyphs.top() - creamLogical.top();
+  if (std::abs(left - right) > 2.0 || std::abs(left - pad) > 2.0) {
+    error = QStringLiteral("Live text was not centered in the cream pill "
+                           "(left %1, right %2, want %3)")
+                .arg(left)
+                .arg(right)
+                .arg(pad);
+    return false;
+  }
+  if (std::abs(top - pad) > 2.0) {
+    error = QStringLiteral("Live text sat against the top of the cream pill "
+                           "(top %1, want %2)")
+                .arg(top)
+                .arg(pad);
+    return false;
+  }
+  if (std::abs(creamLogical.width() - want.width()) > 2.0 ||
+      std::abs(creamLogical.height() - want.height()) > 2.0) {
+    error = QStringLiteral("Live cream pill did not match the committed bounds");
+    return false;
+  }
+  return true;
+}
+
 bool runTextPillSmoke(QApplication &application, QString &error) {
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -6035,6 +6153,10 @@ int main(int argc, char **argv) {
   if (!runTextPillRenderingCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 102;
+  }
+  if (!runLiveTextPillCenteringSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 127;
   }
   if (!runTextPillSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;

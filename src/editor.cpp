@@ -35,6 +35,7 @@
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QScrollBar>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QThread>
 #include <QTimer>
@@ -5695,14 +5696,25 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   }
 
   if (textEditing()) {
-    // Cream pill under the transparent inline editor, and
-    // a caret spanning the glyph box rather than Neucha's whole line height.
+    // Cream pill under the transparent inline editor, sized like the
+    // committed label — not the QPlainTextEdit's tall line box, which
+    // leaves the letters high and left until you finish typing.
+    // A caret spanning the glyph box rather than Neucha's whole line height.
     const QRectF box = textEditor_->geometry();
     if (textEditPill_) {
-      const qreal radius = std::min(box.height() / 4.0, 6.0);
+      QTextCursor start(textEditor_->document());
+      start.setPosition(0);
+      const QPointF origin =
+          QRectF(textEditor_->cursorRect(start))
+              .translated(box.topLeft() + textEditor_->viewport()->pos())
+              .topLeft();
+      const QRectF pill =
+          textLabelBounds(textEditor_->font(), textEditor_->toPlainText(),
+                          origin, TextBackground::Pill);
+      const qreal radius = std::min(pill.height() / 4.0, 6.0);
       painter.setPen(Qt::NoPen);
       painter.setBrush(QColor(248, 245, 235));
-      painter.drawRoundedRect(box, radius, radius);
+      painter.drawRoundedRect(pill, radius, radius);
     }
     if (textCaretOn_ && textEditor_->hasFocus()) {
       const QFontMetricsF metrics(textEditor_->font());
