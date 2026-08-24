@@ -25,8 +25,9 @@ constexpr int kRecentSnapLimit = 5;
 /// Longest edge of a stored thumbnail, in pixels.
 constexpr int kRecentThumbEdge = 320;
 
-/// `$FOMOSNAP_RECENT_DIR`, else `$XDG_STATE_HOME/fomosnap/recent`. Created on
-/// demand; empty when it cannot be.
+/// `$FOMOSNAP_RECENT_DIR`, else Qt `StateLocation` plus `recent/`
+/// (`~/Library/Preferences/FOMOsnap/fomosnap/State/recent` on macOS). Created
+/// on demand; empty when it cannot be.
 [[nodiscard]] QString recentSnapsDirectory();
 
 /// Newest first, at most `kRecentSnapLimit`. Thumbnails are decoded when
