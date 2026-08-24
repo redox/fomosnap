@@ -48,7 +48,7 @@ struct CaptureData {
   QVector<WindowTarget> windows;
 };
 
-enum class BackgroundStyle { None, Aurora, Sunset, Lagoon, Violet };
+enum class BackgroundStyle { None, Slate, Aurora, Sunset, Lagoon, Violet };
 enum class QuickOutputMode { None, Copy, Save, Both };
 
 enum class SpotlightShape { Ellipse, Rectangle, RoundedRectangle };
@@ -98,6 +98,7 @@ struct Operation {
   Type type = Type::Annotate;
   QRectF crop;
   BackgroundStyle background = BackgroundStyle::None;
+  bool imageShadow = true;
   QVector<Annotation> annotations;
   QVector<quint64> ids;
   CutOp cut;
@@ -159,6 +160,16 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] QRectF textLabelBounds(const QFont &font, const QString &text,
                                      const QPointF &glyphTopLeft,
                                      TextBackground background);
+/**
+ * Tight, pixel-aligned annotation space containing both the source frame and
+ * every annotation's painted extent. The source frame always starts at 0,0;
+ * a negative top/left means background was added before it. Keeping this as a
+ * derived value avoids translating layers or repeatedly copying the source as
+ * the canvas grows and shrinks.
+ */
+[[nodiscard]] QRectF
+captureCanvasRect(const QSizeF &sourceFrameSize,
+                  const QVector<Annotation> &annotations);
 /** A repeatable capture session for one display (`MonitorInfo::name`): open
  *  once, then grab frames repeatedly. A scroll capture takes many per second
  *  and must not pay a process spawn for each. Frames are captured without the
@@ -205,7 +216,8 @@ void describeFileCapture(CaptureData &capture, QImage image,
 [[nodiscard]] QImage renderCapture(const CaptureData &capture,
                                    const QRectF &selection,
                                    const QVector<Annotation> &annotations,
-                                   BackgroundStyle backgroundStyle);
+                                   BackgroundStyle backgroundStyle,
+                                   bool imageShadow = true);
 /** Loads the current clipboard image. */
 [[nodiscard]] bool loadClipboardImage(QImage &image, QString &error);
 [[nodiscard]] bool copyPngFileToClipboard(const QString &path, QString &error);
@@ -228,6 +240,9 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
                        const QVector<Annotation> &annotations);
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle);
+/** Paints the app's soft ambient-plus-key shadow around `imageRect`. */
+void paintCaptureImageShadow(QPainter &painter, const QRectF &imageRect,
+                             qreal scaleX = 1.0, qreal scaleY = 1.0);
 /**
  * Renders the selection region at `targetSize` for the redaction layer. The
  * result carries no annotations; callers overlay redactions with

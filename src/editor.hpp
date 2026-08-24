@@ -90,6 +90,19 @@ public:
   /** Current monitor data (background capture may be in flight). */
   const CaptureData &captureData() const { return capture_; }
   [[nodiscard]] QRectF currentSelection() const { return selection_; }
+  /** Annotation-space canvas, including any strips grown past the source. */
+  [[nodiscard]] QRectF currentCanvasForTest() const { return canvasRect_; }
+  /** Fitted canvas and source-frame geometry used by headless interactions. */
+  [[nodiscard]] QRectF sourceFrameWidgetRectForTest() const {
+    return sourceFrameWidgetRect();
+  }
+  [[nodiscard]] QPointF annotationPointToWidgetForTest(
+      const QPointF &point) const {
+    return sourceFrameWidgetRect().topLeft() + point * editScale();
+  }
+  [[nodiscard]] const QVector<Annotation> &currentAnnotationsForTest() const {
+    return annotations_;
+  }
   [[nodiscard]] const QVector<Operation> &operationLog() const { return ops_; }
   [[nodiscard]] int operationIndex() const { return opIndex_; }
   [[nodiscard]] QString workingSourcePath() const { return snapshotPath_; }
@@ -201,6 +214,7 @@ private:
   struct EditState {
     QVector<Annotation> annotations;
     BackgroundStyle backgroundStyle = BackgroundStyle::None;
+    bool imageShadow = true;
     QRectF selection;
     int selectedAnnotation = -1;
     QVector<int> selectedAnnotations;
@@ -209,7 +223,6 @@ private:
   };
 
   [[nodiscard]] QRectF annotationBounds(const Annotation &annotation) const;
-  [[nodiscard]] QRectF selectedAnnotationsBounds() const;
   void selectAllAnnotations();
   [[nodiscard]] bool annotationSelected(int index) const;
   /// What a pointer event reports, or nothing until a key event has confirmed
@@ -400,6 +413,8 @@ private:
   /// baseImageRect transformed by the current view zoom and pan (content and
   /// annotations map through this). Equals baseImageRect at zoom 1.
   [[nodiscard]] QRectF editImageRect() const;
+  /// The unmodified screenshot's frame inside the possibly-grown canvas.
+  [[nodiscard]] QRectF sourceFrameWidgetRect() const;
   [[nodiscard]] qreal editScale() const;
   /// Multiplier from the fit scale to the largest useful zoom (1 source px ->
   /// a few screen px); 1.0 when the image already fits comfortably.
@@ -507,6 +522,9 @@ private:
   void completeReopenRecent(const ReopenResult &result);
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
+  void refreshCanvasRect();
+  [[nodiscard]] bool canvasGrown() const;
+  [[nodiscard]] BackgroundStyle effectiveBackgroundStyle() const;
   void enterEdit(QString status);
   /// Routes a confirmed screen selection to quick export or the editor.
   void enterSelectedCapture(QString editStatus);
@@ -526,7 +544,8 @@ private:
   void commitDelete(const QVector<int> &indices);
   void commitCrop(const QRectF &crop);
   void commitCut(CutOp cut);
-  void commitBackground(BackgroundStyle style);
+  void commitBackground(BackgroundStyle style, bool imageShadow);
+  void cycleBackground();
   void replayLog();
   void redoEdit();
   void selectWindowInDirection(int key);
@@ -605,6 +624,10 @@ private:
   QTimer recentsAnimTimer_;
   QTimer pointerSyncTimer_;
   QRectF selection_;
+  // Annotation coordinates stay anchored to the source frame at 0,0. This
+  // derived rect expands around them without translating either the source or
+  // existing layers; replaying the op log reconstructs it exactly.
+  QRectF canvasRect_;
   QPointF dragStart_;
   QRectF originalSelection_;
   QRectF cropDragImageRect_;
@@ -645,6 +668,7 @@ private:
   qreal cutDragOriginOffset_ = 0.0;
   bool windowMode_ = false;
   BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
+  bool imageShadow_ = true;
   bool busy_ = false;
   bool colorPaletteOpen_ = false;
   bool customColorPickerOpen_ = false;
