@@ -27,7 +27,7 @@ LINT_SOURCES := $(wildcard src/*.cpp tests/*.cpp)
 # and the platform layer is small enough to review by eye.
 LINT_CHECKS ?= -*,clang-analyzer-*,bugprone-*,performance-*,misc-*
 
-.PHONY: all configure build clean check formula-check install smoke lint qt-lint run agent icon
+.PHONY: all configure build clean check cask-check install smoke lint qt-lint run agent icon
 
 all: build
 
@@ -77,10 +77,10 @@ qt-lint: build
 		echo "make check: no QML sources or qmllint unavailable; skipping"; \
 	fi
 
-formula-check:
-	ruby tests/homebrew-formula-smoke.rb packaging/homebrew/fomosnap.rb
+cask-check:
+	ruby tests/homebrew-cask-smoke.rb packaging/homebrew/fomosnap.rb
 
-check: formula-check smoke lint qt-lint
+check: cask-check smoke lint qt-lint
 
 clean:
 	@if test -d "$(BUILD_DIR)"; then \
