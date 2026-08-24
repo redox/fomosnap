@@ -1,9 +1,7 @@
-/** @fileoverview Implements live and adjustable release-time pen smoothing. */
+/** @fileoverview Implements adjustable release-time pen smoothing. */
 #include "stroke-smoothing.hpp"
 
 #include <algorithm>
-#include <cmath>
-#include <cstddef>
 #include <limits>
 #include <utility>
 
@@ -160,55 +158,6 @@ QVector<QPointF> chaikinSmooth(const QVector<QPointF> &points, int passes) {
 }
 
 } // namespace
-
-void InputSmoother::reset() {
-  historySum_ = {};
-  smoothed_ = {};
-  historyCount_ = 0;
-  historyNext_ = 0;
-  hasSmoothed_ = false;
-  clock_.invalidate();
-}
-
-QPointF InputSmoother::update(const QPointF &raw) {
-  qreal elapsed = 0.0;
-  if (clock_.isValid())
-    elapsed = static_cast<qreal>(clock_.restart()) / 1000.0;
-  else
-    clock_.start();
-  return update(raw, elapsed);
-}
-
-QPointF InputSmoother::update(const QPointF &raw, qreal elapsedSeconds) {
-  if (historyCount_ == historyCapacity) {
-    historySum_ -= history_.at(static_cast<std::size_t>(historyNext_));
-  } else {
-    ++historyCount_;
-  }
-  history_[static_cast<std::size_t>(historyNext_)] = raw;
-  historySum_ += raw;
-  historyNext_ = (historyNext_ + 1) % historyCapacity;
-
-  const QPointF averaged = historySum_ / historyCount_;
-  const int oldestIndex =
-      historyCount_ == historyCapacity ? historyNext_ : 0;
-  const qreal distance =
-      QLineF(history_.at(static_cast<std::size_t>(oldestIndex)), raw).length();
-  const qreal duration =
-      std::clamp(elapsedSeconds * historyCount_, 0.001, 1.0);
-  const qreal speed = distance / duration;
-  const qreal normalized =
-      std::sqrt(std::clamp(speed, 0.01, 500.0) / 500.0);
-  const qreal alpha = 0.05 + (0.5 - 0.05) * normalized;
-
-  if (!hasSmoothed_) {
-    smoothed_ = averaged;
-    hasSmoothed_ = true;
-  } else {
-    smoothed_ = averaged * alpha + smoothed_ * (1.0 - alpha);
-  }
-  return smoothed_;
-}
 
 QVector<QPointF> smoothFreehand(const QVector<QPointF> &points, int level) {
   const int clampedLevel =

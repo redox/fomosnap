@@ -70,25 +70,6 @@ bool hasInkNear(const QImage &image, const QPointF &point,
 } // namespace
 
 bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
-  // The online stage uses both a short moving average and a speed-sensitive
-  // blend. Its first sample is exact, later samples are filtered, and reset
-  // must not leak the preceding stroke into the next one.
-  stroke::InputSmoother input;
-  input.reset();
-  const QPointF first = input.update({10, 10}, 0.01);
-  const QPointF second = input.update({20, 14}, 0.01);
-  if (first != QPointF(10, 10) || second == QPointF(20, 14) ||
-      second.x() <= first.x() || second.x() >= 20 || second.y() <= 10 ||
-      second.y() >= 14) {
-    error = QStringLiteral("Adaptive pen input was not smoothed");
-    return false;
-  }
-  input.reset();
-  if (input.update({90, 70}, 0.01) != QPointF(90, 70)) {
-    error = QStringLiteral("Pen input smoothing leaked between strokes");
-    return false;
-  }
-
   // Empty, click/dot and two-point strokes are already the simplest possible
   // geometry. They must survive every release level byte-for-byte.
   const QVector<QPointF> empty;
@@ -193,7 +174,7 @@ bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Exercise the complete editor path: live input -> release smoothing -> op
+  // Exercise the complete editor path: raw input -> release smoothing -> op
   // log -> rendering -> stroke hit-test -> box resize -> undo/redo.
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -209,8 +190,9 @@ bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  // A 400x300 file fits at 1:1 in the editor's (30,68)-(770,542) band.
-  const QPointF imageOrigin(200, 155);
+  // A 400x300 file fits at 1:1 in the editor's content band; the measured
+  // origin keeps the drag coordinates exact whatever the chrome height is.
+  const QPointF imageOrigin = editor.editImageRectForTest().topLeft();
   const QVector<QPointF> raw{{35, 65},  {55, 68},  {75, 62},  {95, 70},
                              {115, 90}, {135, 118}, {155, 124}, {175, 116},
                              {195, 92}, {215, 72},  {235, 65}};
@@ -237,7 +219,7 @@ bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
   const Annotation committed = editor.operationLog().last().annotations.first();
   if (committed.kind != Annotation::Kind::Freehand ||
       committed.smoothingLevel != stroke::defaultSmoothingLevel ||
-      committed.rawPoints.size() < 3 || committed.points.size() < 3 ||
+      committed.rawPoints != raw || committed.points.size() < 3 ||
       committed.points == committed.rawPoints ||
       committed.points != stroke::smoothFreehand(committed.rawPoints, 3) ||
       !nearPoint(committed.points.first(), raw.first()) ||
@@ -256,6 +238,43 @@ bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
     error = QStringLiteral(
         "Committed smoothed pen endpoints were absent from export");
     return false;
+  }
+
+  // Level zero must keep the exact samples delivered to the editor. The
+  // default starts at three, so explicitly wheel it down before drawing.
+  {
+    CaptureEditor rawEditor(capture, CaptureEditor::CaptureMode::File);
+    rawEditor.setSuppressSnapshots(true);
+    rawEditor.resize(800, 600);
+    rawEditor.show();
+    application.processEvents();
+    QTest::keyClick(&rawEditor, Qt::Key_F);
+    for (int level = stroke::defaultSmoothingLevel;
+         level > stroke::minimumSmoothingLevel; --level) {
+      QWheelEvent wheel(QPointF(400, 300), QPointF(400, 300), {}, {0, -120},
+                        Qt::NoButton, Qt::AltModifier, Qt::NoScrollPhase,
+                        false);
+      QApplication::sendEvent(&rawEditor, &wheel);
+    }
+    QTest::mousePress(&rawEditor, Qt::LeftButton, Qt::NoModifier,
+                      (imageOrigin + raw.first()).toPoint());
+    for (qsizetype index = 1; index + 1 < raw.size(); ++index)
+      QTest::mouseMove(&rawEditor,
+                       (imageOrigin + raw.at(index)).toPoint(), 1);
+    QTest::mouseRelease(&rawEditor, Qt::LeftButton, Qt::NoModifier,
+                        (imageOrigin + raw.last()).toPoint());
+    application.processEvents();
+    if (rawEditor.operationLog().isEmpty()) {
+      error = QStringLiteral("Raw pen stroke did not commit");
+      return false;
+    }
+    const Annotation rawStroke =
+        rawEditor.operationLog().last().annotations.constFirst();
+    if (rawStroke.smoothingLevel != stroke::minimumSmoothingLevel ||
+        rawStroke.rawPoints != raw || rawStroke.points != rawStroke.rawPoints) {
+      error = QStringLiteral("Pen level zero did not preserve raw input");
+      return false;
+    }
   }
 
   QTest::keyClick(&editor, Qt::Key_V);
