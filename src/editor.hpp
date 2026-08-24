@@ -387,6 +387,10 @@ private:
   void clampViewOffset();
   [[nodiscard]] QPointF toAnnotationPoint(const QPointF &position) const;
   [[nodiscard]] QPointF toUnclampedAnnotationPoint(const QPointF &position) const;
+  /// Counters sit just ahead of the pointing-hand hotspot, as though its tip
+  /// is placing them. The lead is screen-space so zooming never moves the
+  /// counter closer to or farther from the cursor.
+  [[nodiscard]] QPointF markerPlacementPoint(const QPointF &position) const;
   [[nodiscard]] bool selectedLayerAcceptsPoint(const QPointF &point) const;
   [[nodiscard]] QRectF sourceRect(const QRectF &logicalRect) const;
   [[nodiscard]] QPointF sourcePoint(const QPointF &logicalPoint) const;
