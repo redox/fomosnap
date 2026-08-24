@@ -4507,14 +4507,14 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Ctrl+A then Delete removes every layer as one undo step, even with a
+  // Cmd+A then Delete removes every layer as one undo step, even with a
   // single layer selected beforehand.
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 212));
   QTest::keyClick(&editor, Qt::Key_A, Qt::ControlModifier);
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(expected({}))) {
-    error = QStringLiteral("Ctrl+A then Delete did not remove every layer");
+    error = QStringLiteral("Cmd+A then Delete did not remove every layer");
     return false;
   }
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
@@ -5382,11 +5382,11 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Scrolling at fit changed the view");
     return false;
   }
-  // Ctrl+wheel is the zoom gesture.
+  // Cmd+wheel is the zoom gesture.
   wheel(360, Qt::ControlModifier);
   const QImage zoomedView = contentBand(editor.grab().toImage());
   if (zoomedView == fitView) {
-    error = QStringLiteral("Ctrl+wheel did not zoom the view");
+    error = QStringLiteral("Cmd+wheel did not zoom the view");
     return false;
   }
   // Plain wheel scrolls the zoomed view vertically.
@@ -5433,11 +5433,11 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Middle-drag did not pan the view");
     return false;
   }
-  // Ctrl+0 restores fit exactly.
+  // Cmd+0 restores fit exactly.
   QTest::keyClick(&editor, Qt::Key_0, Qt::ControlModifier);
   application.processEvents();
   if (contentBand(editor.grab().toImage()) != fitView) {
-    error = QStringLiteral("Ctrl+0 did not restore the fitted view");
+    error = QStringLiteral("Cmd+0 did not restore the fitted view");
     return false;
   }
   // Placing an annotation while zoomed lands at the intended image point:
@@ -5513,7 +5513,7 @@ bool runViewportZoomSmoke(QApplication &application, QString &error) {
 
 /** The capture-kind tabs across the top: clicking Window and Region moves
  *  between the two modes Space toggles, and Fullscreen selects the monitor the
- *  way Ctrl+A does. */
+ *  way Cmd+A does. */
 bool runSelectTabsSmoke(QApplication &application, QString &error) {
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -5996,7 +5996,7 @@ bool runLiveSelectionCaptureSmoke(QApplication &application, QString &error) {
       fullscreenEditor.selectingForTest() ||
       fullscreenEditor.renderCurrentOutput().size() != QSize(320, 240)) {
     error = QStringLiteral(
-        "Ctrl+A did not capture the live desktop as fullscreen");
+        "Cmd+A did not capture the live desktop as fullscreen");
     return false;
   }
   fullscreenEditor.close();
@@ -6588,7 +6588,7 @@ int main(int argc, char **argv) {
   const QImage hoverUi = editor.grab().toImage();
   if (hoverUi.pixelColor(200, 160) != capture.source.pixelColor(200, 160))
     return 7;
-  QTest::keyClick(&editor, Qt::Key_Right, Qt::MetaModifier);
+  QTest::keyClick(&editor, Qt::Key_Right, Qt::ControlModifier);
   application.processEvents();
   const QImage keyboardWindowUi = editor.grab().toImage();
   if (keyboardWindowUi.pixelColor(500, 200) !=
