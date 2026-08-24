@@ -424,6 +424,10 @@ private:
   /// How much vertical room the tab strip and toolbar actually need, at the
   /// current window width — the image's top margin, not a guessed constant.
   [[nodiscard]] qreal imageTopMargin() const;
+  /// editImageRect clipped to the viewport band. Zoomed past fit the image
+  /// runs beyond the band; the chrome that frames it (crop outline, handles,
+  /// shadow) frames what is visible, not the off-screen edges.
+  [[nodiscard]] QRectF visibleEditImageRect() const;
   /// baseImageRect transformed by the current view zoom and pan (content and
   /// annotations map through this). Equals baseImageRect at zoom 1.
   [[nodiscard]] QRectF editImageRect() const;
