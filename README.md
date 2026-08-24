@@ -272,7 +272,7 @@ Drag a region, then pick a direction: **Manual ↓ / →** scrolls the page
 yourself while FOMOsnap captures each step, and **Auto ↓ / →** scrolls it for
 you, one acknowledged notch at a time, stopping when the page stops moving.
 The frames are aligned and stitched into one image and opened in the editor,
-where `Ctrl`+wheel zooms and the wheel scrolls it.
+where `Cmd`+wheel zooms and the wheel scrolls it.
 
 Compatibility positional names are also accepted:
 
@@ -418,9 +418,9 @@ without reaching for the pointer.
 | `Space` | Step through the capture-kind tabs (Region, Scrolling Region, Window) |
 | `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
-| `SUPER + Arrow` | Move among windows in window mode |
+| `Cmd+Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |
-| `Ctrl+A` | Select the full focused monitor (the Fullscreen tab) |
+| `Cmd+A` | Select the full focused monitor (the Fullscreen tab) |
 | Hover the right-edge stack | Fan out the five most recent captures; click one to reopen it |
 | `Esc` | Dismiss (while selecting; in the editor, `Esc` returns to Select and a second `Esc` closes) |
 
@@ -445,18 +445,18 @@ without reaching for the pointer.
 | `1`–`8` | Set annotation color; `7` is black and `8` is white |
 | Wheel | Scale selected layer, magnify the spotlight under the cursor, or change active tool size (`Alt`+wheel: rectangle corner radius or spotlight border); while just viewing a zoomed capture, scroll it like a document |
 | `Shift`+wheel | Scroll a zoomed capture sideways (a wide stitch); never changes the zoom |
-| `Ctrl`+wheel · middle-drag | Zoom about the cursor · pan by dragging |
-| `+` / `-` / `0` (also with `Ctrl`) | Zoom in / out / fit |
+| `Cmd`+wheel · middle-drag | Zoom about the cursor · pan by dragging |
+| `+` / `-` / `0` (also with `Cmd`) | Zoom in / out / fit |
 | Hold `Shift` while dragging | Make rectangles, ellipses, and spotlights 1:1; snap lines and arrows to 45°; while dragging a selected layer's handle, keep a rectangle, redaction or spotlight's aspect ratio (lines and arrows: 45°) |
 | Hold `Alt` while dragging | Center rectangles, ellipses, and spotlights on the press point; add `Shift` for a centered square/circle |
 | `←` `↑` `→` `↓` | Nudge the selected layer 1 px; hold `Shift` for 10 px (a held key is one undo step). With nothing selected, pan a zoomed capture |
 | Double-click text · `Enter` on a selected text | Reopen text editing |
 | `Delete` | Delete selected layer |
 | `Alt+D` | Duplicate selected layer (offset down-left, or away from a nearby edge); the copy becomes the selection |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Shift+Z`, `Ctrl+Y` | Redo |
-| `Ctrl+C` | Copy PNG only |
-| `Ctrl+S` | Save PNG only |
+| `Cmd+Z` | Undo |
+| `Cmd+Shift+Z`, `Cmd+Y` | Redo |
+| `Cmd+C` | Copy PNG only |
+| `Cmd+S` | Save PNG only |
 | `Enter` | Copy and save (with a text layer selected: edit it) |
 | `P` | Pin the capture on screen and close the editor |
 | `Esc` | Return to Select; press again to close |
@@ -483,7 +483,7 @@ Hover the pin to reveal its controls:
 |---|---|
 | Edit button | Reopen the full-resolution PNG in FOMOsnap and replace the pin |
 | Link button | Copy the source file path |
-| Copy button, `Ctrl+C` | Copy the full-resolution PNG |
+| Copy button, `Cmd+C` | Copy the full-resolution PNG |
 | Double-wide top-left drag handle | Drag the PNG into a file-capable drop target |
 | Wheel | Resize within the screen caps, preserving aspect ratio |
 | Close button, `Esc`, middle-click | Close |

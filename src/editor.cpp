@@ -2065,14 +2065,14 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
       QStringLiteral("Copy all text in the image · O"));
   add(36, QStringLiteral("background"), {},
       QStringLiteral("Cycle backdrop · B"));
-  add(36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Ctrl+Z"));
+  add(36, QStringLiteral("undo"), {}, QStringLiteral("Undo · Cmd+Z"));
   add(36, QStringLiteral("redo"), {},
-      QStringLiteral("Redo · Ctrl+Shift+Z / Ctrl+Y"));
+      QStringLiteral("Redo · Cmd+Shift+Z / Cmd+Y"));
   add(36, QStringLiteral("pin"), {},
-      QStringLiteral("Pin on screen · P · Ctrl+C on the pin copies it"));
-  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy only · Ctrl+C"));
+      QStringLiteral("Pin on screen · P · Cmd+C on the pin copies it"));
+  add(36, QStringLiteral("copy"), {}, QStringLiteral("Copy only · Cmd+C"));
   add(40, QStringLiteral("both"), {}, QStringLiteral("Copy and save · Enter"));
-  add(36, QStringLiteral("save"), {}, QStringLiteral("Save only · Ctrl+S"));
+  add(36, QStringLiteral("save"), {}, QStringLiteral("Save only · Cmd+S"));
   add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc twice"));
 
   if (shapeMenuOpen_) {
@@ -2414,7 +2414,7 @@ void CaptureEditor::undoEdit() {
   --opIndex_;
   replayLog();
   scheduleSnapshot();
-  setStatus(QStringLiteral("Undo · Ctrl+Shift+Z or Ctrl+Y to redo"));
+  setStatus(QStringLiteral("Undo · Cmd+Shift+Z or Cmd+Y to redo"));
 }
 
 void CaptureEditor::redoEdit() {
@@ -2427,7 +2427,7 @@ void CaptureEditor::redoEdit() {
   ++opIndex_;
   replayLog();
   scheduleSnapshot();
-  setStatus(QStringLiteral("Redo · Ctrl+Z to undo"));
+  setStatus(QStringLiteral("Redo · Cmd+Z to undo"));
 }
 
 void CaptureEditor::scheduleSnapshot() {
@@ -3177,7 +3177,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
         event->key() == Qt::Key_Left || event->key() == Qt::Key_Right ||
         event->key() == Qt::Key_Up || event->key() == Qt::Key_Down;
     if (windowMode_ && directionalKey &&
-        event->modifiers().testFlag(Qt::MetaModifier)) {
+        event->modifiers().testFlag(Qt::ControlModifier)) {
       selectWindowInDirection(event->key());
       event->accept();
       update();
@@ -3292,6 +3292,8 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
   } else if (event->matches(QKeySequence::Save)) {
     finish(OutputMode::Save);
     return;
+  } else if (event->matches(QKeySequence::SelectAll)) {
+    selectAllAnnotations();
   } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
     // Enter on a selected label reopens it for editing; anywhere else it
     // finishes the capture.
@@ -3341,17 +3343,21 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
                                         : QPointF(0, -step);
     panView(delta);
     setStatus(QStringLiteral("Panning · arrows move, Shift jumps · middle-drag "
-                             "pans · Ctrl+0 fits"));
+                             "pans · Cmd+0 fits"));
   } else if ((event->key() == Qt::Key_Delete ||
               event->key() == Qt::Key_Backspace) &&
              !selectedAnnotations_.isEmpty()) {
     commitDelete(selectedAnnotations_);
     selectedAnnotations_.clear();
     selectedAnnotation_ = -1;
+  } else if (event->modifiers().testFlag(Qt::ControlModifier) ||
+             event->modifiers().testFlag(Qt::MetaModifier)) {
+    // Cmd chords that are not Copy/Save/Undo/Redo/Select All/zoom must not
+    // fall through to the letter tools (Cmd+C is copy, not Marker).
+    QWidget::keyPressEvent(event);
+    return;
   } else if (event->key() == Qt::Key_V) {
     tool_ = Tool::Select;
-  } else if (event->matches(QKeySequence::SelectAll)) {
-    selectAllAnnotations();
   } else if (event->key() == Qt::Key_A) {
     tool_ = Tool::Arrow;
   } else if (event->key() == Qt::Key_L) {
@@ -3966,7 +3972,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
       dragging_ = false;
       setStatus(selectedAnnotations_.isEmpty()
                     ? QStringLiteral("No layer selected")
-                    : QStringLiteral("%1 layers selected · Ctrl-click toggles")
+                    : QStringLiteral("%1 layers selected · Cmd-click toggles")
                           .arg(selectedAnnotations_.size()));
       updatePointerCursor();
       update();
@@ -4161,7 +4167,7 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
   if ((interaction_ == Interaction::Move || isLayerResize(interaction_)) &&
       tool_ != Tool::Select) {
     // A grab with a drawing tool armed: keep the move, keep the tool. It is
-    // an edit like any other, so it takes its own undo step. Ctrl+Z after
+    // an edit like any other, so it takes its own undo step. Cmd+Z after
     // nudging a layer must put that layer back, not remove the one before it.
     dragging_ = false;
     interaction_ = Interaction::None;
@@ -4256,7 +4262,7 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     }
     cutDragActive_ = false;
     commitCut(liveCut_);
-    setStatus(QStringLiteral("Cut applied · Ctrl+Z to undo"));
+    setStatus(QStringLiteral("Cut applied · Cmd+Z to undo"));
     updatePointerCursor();
     update();
     return;
@@ -4403,9 +4409,9 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
   const bool overLayer = layerSelected && tool_ != Tool::Spotlight &&
                          !modifiers.testFlag(Qt::AltModifier);
   const auto showZoom = [&] {
-    setStatus(QStringLiteral("Zoom %1% · wheel scrolls · Ctrl+wheel zooms · "
+    setStatus(QStringLiteral("Zoom %1% · wheel scrolls · Cmd+wheel zooms · "
                              "arrows and middle-drag pan · Shift+wheel goes "
-                             "sideways · Ctrl+0 fits")
+                             "sideways · Cmd+0 fits")
                   .arg(qRound(viewZoom_ *
                               (baseImageRect().width() /
                                std::max<qreal>(selection_.width(), 1)) *
@@ -5262,7 +5268,7 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   drawHotkeyLegend(painter, chromeBounds(), cursor_,
                    {{QStringLiteral("Drag"), QStringLiteral("Area")},
                     {QStringLiteral("Space"), QStringLiteral("Window")},
-                    {QStringLiteral("Ctrl+A"), QStringLiteral("Fullscreen")},
+                    {QStringLiteral("Cmd+A"), QStringLiteral("Fullscreen")},
                     {QStringLiteral("R"), QStringLiteral("Last region")},
                     {QStringLiteral("S"), QStringLiteral("Scrolling region")},
                     {QStringLiteral("Esc"), QStringLiteral("Close")}});
@@ -5763,11 +5769,11 @@ void CaptureEditor::paintEdit(QPainter &painter) {
        {QStringLiteral("Wheel"), QStringLiteral("Zoom selected / tool size")},
        {QStringLiteral("D / O"), QStringLiteral("Redact / OCR text")},
        {QStringLiteral("B / P"), QStringLiteral("Backdrop / Pin on screen")},
-       {QStringLiteral("Ctrl+Z"), QStringLiteral("Undo")},
-       {QStringLiteral("Ctrl+Shift+Z"), QStringLiteral("Redo")},
+       {QStringLiteral("Cmd+Z"), QStringLiteral("Undo")},
+       {QStringLiteral("Cmd+Shift+Z"), QStringLiteral("Redo")},
        {QStringLiteral("Enter"), QStringLiteral("Copy + save")},
-       {QStringLiteral("Ctrl+C"), QStringLiteral("Copy only")},
-       {QStringLiteral("Ctrl+S"), QStringLiteral("Save only")},
+       {QStringLiteral("Cmd+C"), QStringLiteral("Copy only")},
+       {QStringLiteral("Cmd+S"), QStringLiteral("Save only")},
        {QStringLiteral("Esc"), QStringLiteral("Arrow / twice close")}},
       keepVisible);
   if (hoveredButton) {
