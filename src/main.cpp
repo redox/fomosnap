@@ -198,6 +198,7 @@ public:
       editor->deleteLater();
     }
     lock_.reset();
+    mac::becomeAccessoryApp();
     stopping_ = false;
   }
 
@@ -383,9 +384,13 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
   // Frameless and translucent before the native window is realised: the edit
   // phase draws a scrim over the live desktop, and a title bar or a drop
   // shadow on a full-screen overlay reads as a rendering bug.
-  editor->setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
+  // Dialog, not Window: Qt realises an NSPanel, which can steal key focus
+  // while another app stays frontmost. A normal NSWindow cannot, so Esc
+  // would go to whatever was focused until a click.
+  editor->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint |
                          Qt::NoDropShadowWindowHint);
   editor->setAttribute(Qt::WA_TranslucentBackground);
+  editor->setAttribute(Qt::WA_ShowWithoutActivating);
   editor->setScreen(targetScreen);
   editor->setGeometry(targetScreen->geometry());
   editor->winId();

@@ -68,10 +68,6 @@ void installNotificationHandler();
  *  you switch to. */
 void becomeAccessoryApp();
 
-/** Brings the process forward so the overlay takes the keyboard even when
- *  another app was frontmost. */
-void activateApp();
-
 /** Registers/removes the login item that starts the resident agent. */
 [[nodiscard]] bool setLaunchAtLogin(bool enabled, QString &error);
 [[nodiscard]] bool launchesAtLogin();
