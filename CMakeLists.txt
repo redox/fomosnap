@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(fomosnap VERSION 2.0.1 LANGUAGES C CXX OBJCXX)
+project(fomosnap VERSION 2.0.2 LANGUAGES C CXX OBJCXX)
 include(GNUInstallDirs)
 include(CTest)
 set(CMAKE_AUTOMOC ON)
