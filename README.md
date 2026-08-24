@@ -223,7 +223,8 @@ overlay, again to dismiss it.
 
 `--install-agent` writes a user LaunchAgent to
 `~/Library/LaunchAgents/com.fomosnap.FOMOsnap.agent.plist` and loads it, so the
-agent starts at every login. `--uninstall-agent` unloads and removes it.
+agent starts at every login and is restored if macOS quits it during a
+permission change. `--uninstall-agent` unloads and removes it.
 
 Two details that are load-bearing rather than incidental:
 
