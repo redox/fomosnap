@@ -4,8 +4,8 @@
 # Homebrew cask for FOMOsnap. The canonical copy lives here so it is
 # version-controlled with the code it installs; the tap holds a copy.
 cask "fomosnap" do
-  version "2.0.9"
-  sha256 "edde697c98d3eaced4358807fbc8e3e4865354aeb4ce109b0d288af7c12e1c9e"
+  version "2.1.0"
+  sha256 "6ba8d20f950625de346010861df4ff2111ddddc2b15ca5c4a1bfcb5738b67204"
 
   url "https://github.com/redox/fomosnap/releases/download/v#{version}/fomosnap-#{version}-macos-arm64.tar.gz"
   name "FOMOsnap"
