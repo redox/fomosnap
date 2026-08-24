@@ -995,6 +995,14 @@ bool runQuickOutputChecks(QString &error) {
  * and end with the slug of the app under the selection when one is known.
  */
 bool runScreenshotFilenameChecks(QString &error) {
+  const QString expectedConfig =
+      QDir::homePath() + QStringLiteral("/.config/fomosnap/fomosnap.conf");
+  if (defaultConfigPath() != expectedConfig) {
+    error = QStringLiteral("defaultConfigPath() = %1, expected %2")
+                .arg(defaultConfigPath(), expectedConfig);
+    return false;
+  }
+
   const struct {
     const char *appClass;
     const char *slug;
