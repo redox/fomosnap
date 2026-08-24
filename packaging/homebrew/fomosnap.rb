@@ -41,6 +41,22 @@ class Fomosnap < Formula
     chmod 0755, bin/"fomosnap"
   end
 
+  def post_install
+    marker = var/"fomosnap/agent-defaulted"
+    plist = Pathname(Dir.home)/"Library/LaunchAgents/com.fomosnap.FOMOsnap.agent.plist"
+
+    # Enable the resident agent on a fresh install. On upgrades, only reload
+    # it when the user already has the login item; an explicit
+    # --uninstall-agent must remain an opt-out.
+    if plist.exist? || !marker.exist?
+      system opt_bin/"fomosnap", "--install-agent"
+    end
+    return if marker.exist?
+
+    marker.parent.mkpath
+    touch marker
+  end
+
   def caveats
     <<~EOS
       FOMOsnap needs Screen Recording permission. The first capture explains
@@ -49,9 +65,11 @@ class Fomosnap < Formula
 
       The default shortcut is Ctrl+Cmd+4 (Cmd+Shift+3/4/5 belong to macOS).
 
-      To hold that shortcut, run the resident agent:
+      The Homebrew install starts the resident agent automatically. To manage
+      it manually:
         fomosnap --agent                   # foreground, to try it
-        fomosnap --install-agent           # and start it at login
+        fomosnap --install-agent           # enable or reload at login
+        fomosnap --uninstall-agent         # disable at login
 
       The app bundle is at:
         #{opt_prefix}/FOMOsnap.app
