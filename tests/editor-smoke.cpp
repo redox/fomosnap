@@ -2032,11 +2032,16 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
   const QImage overlayExport =
       renderCapture(capture, QRectF(0, 0, 80, 40), {redaction, arrow, label},
                     BackgroundStyle::None);
-  const QColor overlayFill = overlayExport.pixelColor(22, 12);
+  const QRectF overlayCanvas =
+      captureCanvasRect(QSizeF(80, 40), {redaction, arrow, label});
+  const QPoint overlayOrigin = (-overlayCanvas.topLeft()).toPoint();
+  const QColor overlayFill =
+      overlayExport.pixelColor(overlayOrigin + QPoint(22, 12));
   // Sampled to the right of the "X" glyph box: the arrow runs the full width,
   // but where exactly a glyph lands at 8px depends on the platform's font
   // rasterisation, and this check is about layer order, not about metrics.
-  const QColor overlayStroke = overlayExport.pixelColor(35, 20);
+  const QColor overlayStroke =
+      overlayExport.pixelColor(overlayOrigin + QPoint(35, 20));
   if (overlayExport.isNull() || redactionOnly.isNull() ||
       redactionOnly.pixelColor(22, 12) != solid || showsSecretRed(overlayFill) ||
       overlayStroke.blue() <= overlayStroke.red() + 20) {
@@ -5010,7 +5015,11 @@ bool runTextPillRenderingCheck(QString &error) {
                               qRound(text.start.y() +
                                      QFontMetricsF(annotationTextFont(text.size))
                                          .lineSpacing()));
-  if (multilineImage.pixelColor(secondLinePill) != QColor(248, 245, 235)) {
+  const QRectF multilineCanvas =
+      captureCanvasRect(QSizeF(300, 100), {multiline});
+  const QPoint multilineOrigin = (-multilineCanvas.topLeft()).toPoint();
+  if (multilineImage.pixelColor(multilineOrigin + secondLinePill) !=
+      QColor(248, 245, 235)) {
     error = QStringLiteral("Multiline text pill did not cover the second line");
     return false;
   }
@@ -8674,9 +8683,11 @@ int main(int argc, char **argv) {
   const QImage grownExport =
       renderCapture(clippingCapture, QRectF(0, 0, 100, 100), {croppedOut},
                     BackgroundStyle::Aurora);
+  const QPoint grownOrigin(qRound(-grownCanvas.left()),
+                           qRound(-grownCanvas.top()));
   bool paintedOutsideSource = false;
   for (int y = 0; y < grownExport.height(); ++y) {
-    for (int x = 100; x < grownExport.width(); ++x) {
+    for (int x = grownOrigin.x() + 100; x < grownExport.width(); ++x) {
       const QColor pixel = grownExport.pixelColor(x, y);
       if (pixel.red() > 240 && pixel.green() < 32 && pixel.blue() > 240)
         paintedOutsideSource = true;
@@ -8726,17 +8737,23 @@ int main(int argc, char **argv) {
       isSlateShadow(shadowProbe.pixelColor(110, 40)) &&
       shadowProbe.pixelColor(110, 20) == slate;
   const std::array<int, 5> slateShadowProfile = {
-      slateExport.pixelColor(100, 90).red(),
-      slateExport.pixelColor(111, 90).red(),
-      slateExport.pixelColor(123, 90).red(),
-      slateExport.pixelColor(138, 90).red(),
-      slateExport.pixelColor(142, 90).red()};
+      slateExport.pixelColor(grownOrigin + QPoint(100, 90)).red(),
+      slateExport.pixelColor(grownOrigin + QPoint(111, 90)).red(),
+      slateExport.pixelColor(grownOrigin + QPoint(123, 90)).red(),
+      slateExport.pixelColor(grownOrigin + QPoint(138, 90)).red(),
+      slateExport.pixelColor(grownOrigin + QPoint(142, 90)).red()};
+  const QPoint highDpiGrowthOrigin = grownOrigin * 2;
   const std::array<int, 5> highDpiShadowProfile = {
-      highDpiGrowthExport.pixelColor(200, 180).red(),
-      highDpiGrowthExport.pixelColor(222, 180).red(),
-      highDpiGrowthExport.pixelColor(246, 180).red(),
-      highDpiGrowthExport.pixelColor(276, 180).red(),
-      highDpiGrowthExport.pixelColor(284, 180).red()};
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(200, 180))
+          .red(),
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(222, 180))
+          .red(),
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(246, 180))
+          .red(),
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(276, 180))
+          .red(),
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(284, 180))
+          .red()};
   bool scaleIndependentShadow = true;
   for (std::size_t i = 0; i < slateShadowProfile.size(); ++i) {
     scaleIndependentShadow =
@@ -8751,23 +8768,30 @@ int main(int argc, char **argv) {
       slateShadowProfile.back() == slate.red();
   const bool restrainedShadowStrength =
       bottomShadowProfile.front() >= 20 && slateShadowProfile.front() >= 20;
-  if (grownCanvas != QRectF(0, 0, 153, 100) ||
-      grownExport.size() != QSize(153, 100) || !paintedOutsideSource ||
-      grownExport.pixelColor(0, 0) != QColor(Qt::white) ||
+  if (grownCanvas != QRectF(-64, -64, 228, 228) ||
+      grownExport.size() != QSize(228, 228) || !paintedOutsideSource ||
+      grownExport.pixelColor(grownOrigin) != QColor(Qt::white) ||
       slateExport.size() != grownExport.size() ||
-      slateExport.pixelColor(99, 90) != QColor(Qt::white) ||
+      slateExport.pixelColor(grownOrigin + QPoint(99, 90)) !=
+          QColor(Qt::white) ||
       unshadowedSlateExport.size() != slateExport.size() ||
-      unshadowedSlateExport.pixelColor(99, 90) != QColor(Qt::white) ||
-      unshadowedSlateExport.pixelColor(100, 90) != slate ||
-      unshadowedSlateExport.pixelColor(152, 90) != slate ||
+      unshadowedSlateExport.pixelColor(grownOrigin + QPoint(99, 90)) !=
+          QColor(Qt::white) ||
+      unshadowedSlateExport.pixelColor(grownOrigin + QPoint(100, 90)) !=
+          slate ||
+      unshadowedSlateExport.pixelColor(grownOrigin + QPoint(152, 90)) !=
+          slate ||
       !softAmbientAndKeyShadow || !softlyFadingShadow ||
       !restrainedShadowStrength ||
       !scaleIndependentShadow ||
-      slateExport.pixelColor(152, 90) != slate ||
-      highDpiGrowthExport.size() != QSize(306, 200) ||
-      highDpiGrowthExport.pixelColor(199, 180) != QColor(Qt::white) ||
-      !isSlateShadow(highDpiGrowthExport.pixelColor(200, 180)) ||
-      highDpiGrowthExport.pixelColor(304, 180) != slate ||
+      slateExport.pixelColor(grownOrigin + QPoint(152, 90)) != slate ||
+      highDpiGrowthExport.size() != QSize(456, 456) ||
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(199, 180)) !=
+          QColor(Qt::white) ||
+      !isSlateShadow(highDpiGrowthExport.pixelColor(highDpiGrowthOrigin +
+                                                    QPoint(200, 180))) ||
+      highDpiGrowthExport.pixelColor(highDpiGrowthOrigin +
+                                     QPoint(304, 180)) != slate ||
       slateExport != renderCapture(clippingCapture, QRectF(0, 0, 100, 100),
                                    {croppedOut}, BackgroundStyle::None))
     return 65;
