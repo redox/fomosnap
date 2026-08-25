@@ -863,10 +863,16 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   // select phase, and quick output never shows one long enough to use it.
   if (mode != CaptureMode::File && quickOutputMode_ == QuickOutputMode::None)
     loadRecents();
+  if (mode != CaptureMode::File) {
+    mac::watchFrontmostApplication(
+        [this] { onFrontmostApplicationChanged(); });
+  }
   updatePointerCursor();
 }
 
 CaptureEditor::~CaptureEditor() {
+  if (captureMode_ != CaptureMode::File)
+    mac::watchFrontmostApplication({});
   // Never remove the working snapshot under an in-flight write; drain the
   // current render (dropping any coalesced follow-up) before cleanup.
   snapshotDirty_ = false;
@@ -4695,6 +4701,17 @@ bool CaptureEditor::hasLiveScreen() const {
   return captureMode_ != CaptureMode::File && !liveMonitor_.name.isEmpty();
 }
 
+void CaptureEditor::notifyFrontmostAppChangedForTest() {
+  onFrontmostApplicationChanged();
+}
+
+void CaptureEditor::onFrontmostApplicationChanged() {
+  if (phase_ != Phase::Select)
+    return;
+  releaseFrozenCapture();
+  update();
+}
+
 void CaptureEditor::releaseFrozenCapture() {
   if (capture_.source.isNull()) {
     liveSelection_ = captureMode_ != CaptureMode::File;
@@ -5235,35 +5252,21 @@ void CaptureEditor::paintSelect(QPainter &painter) {
   const bool haveHole =
       windowMode_ ? hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size()
                   : !selection_.isEmpty();
-  QRectF previewHole;
   QRectF destHole;
   if (haveHole) {
-    previewHole = windowMode_ ? QRectF(capture_.windows.at(hoveredWindow_).rect)
-                              : mapWidgetToPreview(selection_);
-    destHole = windowMode_ ? mapPreviewToWidget(previewHole) : selection_;
+    destHole = windowMode_
+                   ? mapPreviewToWidget(
+                         QRectF(capture_.windows.at(hoveredWindow_).rect))
+                   : selection_;
   }
 
   painter.setCompositionMode(QPainter::CompositionMode_Source);
-  if (capture_.source.isNull()) {
-    // Scroll (or a session that has dropped its still) is a scrim over the
-    // live desktop. The committed region is captured then.
-    painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
-    if (haveHole)
-      painter.fillRect(destHole, Qt::transparent);
-  } else {
-    refreshBackdropCache();
-    painter.drawPixmap(rect(), dimmedBackdrop_);
-  }
+  // Select is always a scrim over the live desktop. A held hotkey still is
+  // cropped on commit so hover survives; it is not painted here.
+  painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
+  if (haveHole)
+    painter.fillRect(destHole, Qt::transparent);
   painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-
-  if (haveHole) {
-    if (!capture_.source.isNull()) {
-      painter.save();
-      painter.setClipRect(destHole, Qt::IntersectClip);
-      painter.drawImage(destHole, capture_.source, sourceRect(previewHole));
-      painter.restore();
-    }
-  }
 
   if (windowMode_) {
     for (int index = 0; index < capture_.windows.size(); ++index) {

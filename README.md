@@ -51,9 +51,12 @@ global hotkey were rewritten against macOS frameworks.
 - A recents shelf: the select overlay stacks small cards of the last five captures
   along the right edge; hover to fan them out, click one to reopen it in the editor
   with its layers still editable instead of taking a new screenshot.
-- Region, window, and fullscreen freeze the display under the pointer before
-  the overlay appears, so hover, menus, and tooltips stay in the shot after
-  you move the mouse. Scroll capture stays live so the page can still move.
+- A live selection surface: the desktop keeps updating under the dimmed overlay
+  while FOMOsnap retains keyboard and pointer input. Region, window, and
+  fullscreen still grab the display before the overlay appears, so hover, menus,
+  and tooltips stay in the committed image. Switching the frontmost app (Cmd+Tab)
+  drops that still and recaptures. Scroll capture stays live so the page can
+  still move.
 - Correct native-pixel export on fractional or integer-scaled monitors.
 
 ## Platform scope

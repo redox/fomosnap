@@ -52,8 +52,15 @@ template <typename Editor>
 QImage flushedSnapshot(Editor &editor, const QString &) {
   return editor.renderCurrentOutput();
 }
-/** Cached select-phase painting preserves bright and dimmed capture pixels. */
-bool runBackdropCacheRenderingCheck(QString &error) {
+
+constexpr int kSelectUndim = 143;
+
+/**
+ * A held hotkey still must not be painted during select. Production change
+ * that would fail this: paintSelect blits capture_.source as the dimmed
+ * backdrop or the undimmed hole again.
+ */
+bool runLiveScrimHoldsStillCheck(QString &error) {
   CaptureData capture;
   capture.monitor.geometry = QRect(0, 0, 800, 600);
   capture.monitor.pixelSize = QSize(800, 600);
@@ -70,80 +77,39 @@ bool runBackdropCacheRenderingCheck(QString &error) {
   QTest::mouseMove(&editor, QPoint(600, 430), 20);
   QApplication::processEvents();
   const QImage ui = editor.grab().toImage();
+  if (editor.captureData().source.isNull() || ui.isNull()) {
+    error = QStringLiteral("Live scrim dropped the hotkey still");
+    return false;
+  }
 
   for (const QPoint inside : {QPoint(300, 250), QPoint(500, 400)}) {
-    if (ui.pixelColor(inside) != capture.source.pixelColor(inside)) {
-      error = QStringLiteral("Cached selection backdrop changed source pixels");
+    if (ui.pixelColor(inside).alpha() != 0) {
+      error = QStringLiteral("Live scrim painted the hotkey still into the hole");
       return false;
     }
   }
   for (const QPoint outside : {QPoint(40, 200), QPoint(720, 200)}) {
-    const QColor source = capture.source.pixelColor(outside);
     const QColor dimmed = ui.pixelColor(outside);
-    const auto matches = [](int actual, int expected) {
-      return std::abs(actual - expected) <= 2;
-    };
-    if (!matches(dimmed.red(), source.red() * (255 - 143) / 255) ||
-        !matches(dimmed.green(), source.green() * (255 - 143) / 255) ||
-        !matches(dimmed.blue(), source.blue() * (255 - 143) / 255)) {
-      error = QStringLiteral("Cached selection backdrop changed dimming");
+    if (dimmed.alpha() != kSelectUndim || dimmed.red() != 0 ||
+        dimmed.green() != 0 || dimmed.blue() != 0) {
+      error = QStringLiteral("Live scrim painted the hotkey still as backdrop");
       return false;
     }
   }
   return true;
 }
 
-constexpr int kSelectUndim = 143;
-const QColor kSelectHoleMarker(QStringLiteral("#ff40c0"));
-const QColor kSelectBackdropFill(QStringLiteral("#1a4a7a"));
-
-QColor dimmedSelectColor(const QColor &source) {
-  return QColor(source.red() * (255 - kSelectUndim) / 255,
-                source.green() * (255 - kSelectUndim) / 255,
-                source.blue() * (255 - kSelectUndim) / 255);
-}
-
-bool colorNear(const QColor &actual, const QColor &wanted, int slop = 20) {
-  return std::abs(actual.red() - wanted.red()) <= slop &&
-         std::abs(actual.green() - wanted.green()) <= slop &&
-         std::abs(actual.blue() - wanted.blue()) <= slop;
-}
-
-QRectF mappedRect(const QRectF &rect, const QSize &from, const QSize &to) {
-  if (from.isEmpty() || to.isEmpty() || from == to)
-    return rect;
-  return {rect.x() * to.width() / static_cast<qreal>(from.width()),
-          rect.y() * to.height() / static_cast<qreal>(from.height()),
-          rect.width() * to.width() / static_cast<qreal>(from.width()),
-          rect.height() * to.height() / static_cast<qreal>(from.height())};
-}
-
-QRectF nativeSourceRect(const QSize &source, const QSize &preview,
-                        const QRectF &logical) {
-  if (preview.isEmpty())
-    return {};
-  return {logical.x() * source.width() / static_cast<qreal>(preview.width()),
-          logical.y() * source.height() / static_cast<qreal>(preview.height()),
-          logical.width() * source.width() / static_cast<qreal>(preview.width()),
-          logical.height() * source.height() /
-              static_cast<qreal>(preview.height())};
-}
-
 CaptureData selectHoleCapture(const QSize &preview, const QSize &sourceSize,
-                              qreal scale, const QRectF &previewHole,
+                              qreal scale,
                               const QVector<WindowTarget> &windows = {}) {
   CaptureData capture;
   capture.monitor.geometry = QRect(QPoint(), preview);
   capture.monitor.pixelSize = sourceSize;
   capture.monitor.scale = scale;
   capture.source = QImage(sourceSize, QImage::Format_ARGB32_Premultiplied);
-  capture.source.fill(kSelectBackdropFill);
+  capture.source.fill(QColor(QStringLiteral("#1a4a7a")));
   capture.previewSize = preview;
   capture.windows = windows;
-  QPainter painter(&capture.source);
-  painter.setCompositionMode(QPainter::CompositionMode_Source);
-  painter.fillRect(nativeSourceRect(sourceSize, preview, previewHole),
-                   kSelectHoleMarker);
   return capture;
 }
 
@@ -164,98 +130,36 @@ QColor grabLogicalPixel(const QImage &ui, const QWidget &editor,
   return ui.pixelColor(x, y);
 }
 
-/**
- * Reconstructs the old clip + full-widget backdrop blit. The clip is in the
- * unmapped space the previous punch used (widget selection, or preview
- * window.rect). Sampling destHole on this image is how the suite proves a
- * case actually fails on that path.
- */
-QImage renderOldClipBlit(const QImage &source, const QSize &widget, qreal dpr,
-                         const QRectF &oldClip) {
-  const QSize deviceSize = (QSizeF(widget) * dpr).toSize();
-  QPixmap backdrop(deviceSize);
-  backdrop.setDevicePixelRatio(dpr);
-  backdrop.fill(Qt::transparent);
-  {
-    QPainter cache(&backdrop);
-    cache.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    cache.drawImage(QRectF(QPointF(), QSizeF(deviceSize) / dpr), source);
-  }
-  QPixmap dimmed = backdrop.copy();
-  {
-    QPainter cache(&dimmed);
-    cache.fillRect(QRectF(QPointF(), QSizeF(deviceSize) / dpr),
-                   QColor(0, 0, 0, kSelectUndim));
-  }
-  QImage out(deviceSize, QImage::Format_ARGB32_Premultiplied);
-  out.setDevicePixelRatio(dpr);
-  out.fill(Qt::transparent);
-  QPainter painter(&out);
-  painter.setRenderHints(QPainter::Antialiasing |
-                         QPainter::SmoothPixmapTransform);
-  // Device canvas, logical clip/dest: the space mix that left the hole dim.
-  painter.drawPixmap(QRect(QPoint(), widget), dimmed);
-  painter.save();
-  painter.setClipRect(oldClip);
-  painter.drawPixmap(QRect(QPoint(), widget), backdrop);
-  painter.restore();
-  return out;
-}
-
-QColor oldClipBlitPixel(const QImage &source, const QSize &widget, qreal dpr,
-                        const QRectF &oldClip, const QPointF &logical) {
-  const QImage ui = renderOldClipBlit(source, widget, dpr, oldClip);
-  const qreal scaleX = ui.width() / static_cast<qreal>(std::max(1, widget.width()));
-  const qreal scaleY =
-      ui.height() / static_cast<qreal>(std::max(1, widget.height()));
-  const int x = std::clamp(qRound(logical.x() * scaleX), 0, ui.width() - 1);
-  const int y = std::clamp(qRound(logical.y() * scaleY), 0, ui.height() - 1);
-  return ui.pixelColor(x, y);
-}
-
-bool expectUndimmedHole(const QImage &ui, const CaptureEditor &editor,
-                        const QImage &source, const QSize &widget, qreal dpr,
-                        const QRectF &oldClip, const QPointF &inside,
-                        const QPointF &outside, const QString &what,
-                        QString &error) {
+bool expectLiveHole(const QImage &ui, const CaptureEditor &editor,
+                    const QPointF &inside, const QPointF &outside,
+                    const QString &what, QString &error) {
   const QColor hole = grabLogicalPixel(ui, editor, inside);
   const QColor chrome = grabLogicalPixel(ui, editor, outside);
-  const QColor oldHole = oldClipBlitPixel(source, widget, dpr, oldClip, inside);
-  if (!colorNear(hole, kSelectHoleMarker)) {
-    error = QStringLiteral("%1 hole at %2,%3 was %4, expected undimmed sourceRect")
+  if (hole.alpha() != 0) {
+    error = QStringLiteral("%1 hole at %2,%3 was %4, expected a live punch")
                 .arg(what)
                 .arg(inside.x(), 0, 'f', 1)
                 .arg(inside.y(), 0, 'f', 1)
-                .arg(hole.name());
+                .arg(hole.name(QColor::HexArgb));
     return false;
   }
-  // When the old clip lives in a different space than destHole, the mapped
-  // interior stays dim (or shows the wrong source). Identity clips can match.
-  if (!oldClip.contains(inside) && colorNear(oldHole, kSelectHoleMarker)) {
-    error = QStringLiteral("%1 old clip+blit at %2,%3 already matched the hole")
-                .arg(what)
-                .arg(inside.x(), 0, 'f', 1)
-                .arg(inside.y(), 0, 'f', 1);
-    return false;
-  }
-  if (colorNear(chrome, kSelectHoleMarker) ||
-      !colorNear(chrome, dimmedSelectColor(kSelectBackdropFill), 24)) {
-    error = QStringLiteral("%1 chrome at %2,%3 was %4, expected dimmed backdrop")
+  if (chrome.alpha() != kSelectUndim || chrome.red() != 0 ||
+      chrome.green() != 0 || chrome.blue() != 0) {
+    error = QStringLiteral("%1 chrome at %2,%3 was %4, expected a live scrim")
                 .arg(what)
                 .arg(outside.x(), 0, 'f', 1)
                 .arg(outside.y(), 0, 'f', 1)
-                .arg(chrome.name());
+                .arg(chrome.name(QColor::HexArgb));
     return false;
   }
   return true;
 }
 
 /**
- * The select-phase undim hole must be a destHole/sourceRect blit, not clip +
- * full-widget cache. 1x widget==preview cannot catch fractional scale, 90/270
- * transform, or window.rect preview space.
+ * The select hole is a live punch through the scrim. destHole must stay in
+ * widget space: a preview-space clip leaves the mapped interior dim.
  */
-bool runSelectUndimHoleCheck(QString &error) {
+bool runSelectLiveHoleCheck(QString &error) {
   const auto dragRegion = [](CaptureEditor &editor, const QPoint &a,
                              const QPoint &b) {
     QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, a);
@@ -263,52 +167,38 @@ bool runSelectUndimHoleCheck(QString &error) {
     QApplication::processEvents();
   };
 
-  // Scale 2.0 grab, widget == preview. Native sourceRect is 2x the drag.
   {
     const QSize preview(800, 600);
-    const QSize sourceSize(1600, 1200);
     const QSize widget(800, 600);
-    const QRectF selection(160, 200, 280, 200);
-    CaptureData capture = selectHoleCapture(preview, sourceSize, 2.0, selection);
+    CaptureData capture = selectHoleCapture(preview, {1600, 1200}, 2.0);
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
     dragRegion(editor, QPoint(160, 200), QPoint(440, 400));
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 2.0, selection,
-                            QPointF(280, 300), QPointF(40, 300),
-                            QStringLiteral("Scale 2.0 region"), error))
+    if (!expectLiveHole(ui, editor, QPointF(280, 300), QPointF(40, 300),
+                        QStringLiteral("Scale 2.0 region"), error))
       return false;
   }
 
-  // Region drag when widget != preview: dest is the drag, source is the mapped
-  // preview hole. Old clip+blit using the preview-space rect punches elsewhere.
   {
     const QSize preview(800, 600);
-    const QSize sourceSize(1600, 1200);
     const QSize widget(400, 300);
-    const QRectF selection(60, 140, 140, 100);
-    const QRectF previewHole = mappedRect(selection, widget, preview);
-    CaptureData capture =
-        selectHoleCapture(preview, sourceSize, 2.0, previewHole);
+    CaptureData capture = selectHoleCapture(preview, {1600, 1200}, 2.0);
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
     dragRegion(editor, QPoint(60, 140), QPoint(200, 240));
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 1.0, previewHole,
-                            QPointF(100, 180), QPointF(20, 200),
-                            QStringLiteral("Mismatched region"), error))
+    if (!expectLiveHole(ui, editor, QPointF(100, 180), QPointF(20, 200),
+                        QStringLiteral("Mismatched region"), error))
       return false;
   }
 
-  // Window hover: window.rect is preview space. destHole is mapped to widget.
-  // Old clip uses window.rect on the widget, so the mapped interior stays dim.
   {
     const QSize preview(800, 600);
-    const QSize sourceSize(800, 600);
     const QSize widget(400, 300);
     const QRect windowRect(160, 120, 400, 320);
     CaptureData capture = selectHoleCapture(
-        preview, sourceSize, 1.0, QRectF(windowRect),
+        preview, {800, 600}, 1.0,
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("one")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
@@ -316,20 +206,17 @@ bool runSelectUndimHoleCheck(QString &error) {
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 1.0,
-                            QRectF(windowRect), QPointF(100, 90), QPointF(20, 200),
-                            QStringLiteral("Mismatched window"), error))
+    if (!expectLiveHole(ui, editor, QPointF(100, 90), QPointF(20, 200),
+                        QStringLiteral("Mismatched window"), error))
       return false;
   }
 
-  // 90/270-style aspect swap: widget landscape, preview portrait.
   {
     const QSize preview(600, 800);
-    const QSize sourceSize(600, 800);
     const QSize widget(800, 600);
     const QRect windowRect(80, 200, 200, 280);
     CaptureData capture = selectHoleCapture(
-        preview, sourceSize, 1.0, QRectF(windowRect),
+        preview, {600, 800}, 1.0,
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("rotated")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
@@ -337,56 +224,43 @@ bool runSelectUndimHoleCheck(QString &error) {
     QTest::mouseMove(&editor, QPoint(320, 180), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 1.0,
-                            QRectF(windowRect), QPointF(320, 180),
-                            QPointF(40, 400),
-                            QStringLiteral("Transform window"), error))
+    if (!expectLiveHole(ui, editor, QPointF(320, 180), QPointF(40, 400),
+                        QStringLiteral("Transform window"), error))
       return false;
   }
 
   {
     const QSize preview(600, 800);
-    const QSize sourceSize(600, 800);
     const QSize widget(800, 600);
-    const QRectF selection(80, 200, 200, 160);
-    const QRectF previewHole = mappedRect(selection, widget, preview);
-    CaptureData capture = selectHoleCapture(preview, sourceSize, 1.0, previewHole);
+    CaptureData capture = selectHoleCapture(preview, {600, 800}, 1.0);
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
     dragRegion(editor, QPoint(80, 200), QPoint(280, 360));
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 1.0, previewHole,
-                            QPointF(120, 220), QPointF(30, 400),
-                            QStringLiteral("Transform region"), error))
+    if (!expectLiveHole(ui, editor, QPointF(120, 220), QPointF(30, 400),
+                        QStringLiteral("Transform region"), error))
       return false;
   }
 
-  // Combined mandatory grab: scale 2.0 and widget != preview, window + region.
   {
     const QSize preview(800, 600);
-    const QSize sourceSize(1600, 1200);
     const QSize widget(400, 300);
-    const QRectF selection(60, 140, 140, 100);
-    const QRectF previewHole = mappedRect(selection, widget, preview);
-    CaptureData capture =
-        selectHoleCapture(preview, sourceSize, 2.0, previewHole);
+    CaptureData capture = selectHoleCapture(preview, {1600, 1200}, 2.0);
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
     dragRegion(editor, QPoint(60, 140), QPoint(200, 240));
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 2.0, previewHole,
-                            QPointF(100, 180), QPointF(20, 200),
-                            QStringLiteral("Scale 2.0 mismatched region"), error))
+    if (!expectLiveHole(ui, editor, QPointF(100, 180), QPointF(20, 200),
+                        QStringLiteral("Scale 2.0 mismatched region"), error))
       return false;
   }
 
   {
     const QSize preview(800, 600);
-    const QSize sourceSize(1600, 1200);
     const QSize widget(400, 300);
     const QRect windowRect(160, 120, 400, 320);
     CaptureData capture = selectHoleCapture(
-        preview, sourceSize, 2.0, QRectF(windowRect),
+        preview, {1600, 1200}, 2.0,
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("hidpi")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
@@ -394,10 +268,8 @@ bool runSelectUndimHoleCheck(QString &error) {
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
-    if (!expectUndimmedHole(ui, editor, capture.source, widget, 2.0,
-                            QRectF(windowRect), QPointF(100, 90), QPointF(20, 200),
-                            QStringLiteral("Scale 2.0 mismatched window"),
-                            error))
+    if (!expectLiveHole(ui, editor, QPointF(100, 90), QPointF(20, 200),
+                        QStringLiteral("Scale 2.0 mismatched window"), error))
       return false;
   }
 
@@ -5596,7 +5468,7 @@ bool runAreaLastRegionSmoke(QApplication &application, QString &error) {
 
 /** Scroll mode must drop a hotkey-frozen still so the page under the
  *  overlay stays live. Production change that would fail this: S leaves
- *  capture_.source painted as the select backdrop. */
+ *  capture_.source set, so the next region crops hover instead of the page. */
 bool runScrollDropsFrozenFrameSmoke(QApplication &application, QString &error) {
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -5615,9 +5487,9 @@ bool runScrollDropsFrozenFrameSmoke(QApplication &application, QString &error) {
   const QColor frozenPixel =
       frozenOverlay.isNull() ? QColor() : frozenOverlay.pixelColor(10, 120);
   if (editor.captureData().source.isNull() || frozenOverlay.isNull() ||
-      frozenPixel.alpha() < 255) {
+      frozenPixel.alpha() >= 255) {
     error = QStringLiteral(
-        "Hotkey frame did not paint as an opaque still before scroll mode");
+        "Hotkey frame was painted as the select backdrop before scroll mode");
     return false;
   }
 
@@ -5720,6 +5592,87 @@ bool runScrollDropsFrozenFrameSmoke(QApplication &application, QString &error) {
     return false;
   }
   frozen.close();
+  return true;
+}
+
+/** Cmd+Tab (or any frontmost-app change) must drop the hotkey still so the
+ *  committed crop is the app now under the overlay. Production change that
+ *  would fail this: the still stays set and enterEdit crops the original
+ *  foreground. */
+bool runFrontmostAppSwitchRecaptureSmoke(QApplication &application,
+                                         QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 320, 240};
+  capture.monitor.pixelSize = {320, 240};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(320, 240, QImage::Format_RGB32);
+  capture.source.fill(QColor(QStringLiteral("#28405c")));
+  capture.previewSize = capture.monitor.geometry.size();
+
+  QTemporaryDir captureDir;
+  if (!captureDir.isValid()) {
+    error = QStringLiteral("Could not create app-switch recapture directory");
+    return false;
+  }
+  QImage recapture(320, 240, QImage::Format_RGB32);
+  recapture.fill(QColor(QStringLiteral("#aa3040")));
+  const QString recapturePath =
+      QDir(captureDir.path()).filePath(QStringLiteral("recapture.png"));
+  if (!recapture.save(recapturePath, "PNG")) {
+    error = QStringLiteral("Could not write app-switch recapture source");
+    return false;
+  }
+  const QByteArray oldCapture = qgetenv("FOMOSNAP_TEST_CAPTURE");
+  qputenv("FOMOSNAP_TEST_CAPTURE", recapturePath.toUtf8());
+  const auto restoreCapture = qScopeGuard([&] {
+    if (oldCapture.isEmpty())
+      qunsetenv("FOMOSNAP_TEST_CAPTURE");
+    else
+      qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
+  });
+
+  CaptureEditor editor(capture);
+  editor.resize(320, 240);
+  editor.show();
+  application.processEvents();
+  editor.notifyFrontmostAppChangedForTest();
+  application.processEvents();
+  if (!editor.selectingForTest() || !editor.captureData().source.isNull()) {
+    error = QStringLiteral(
+        "A frontmost-app change left the original hotkey still in place");
+    editor.close();
+    return false;
+  }
+
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 40));
+  QTest::mouseMove(&editor, QPoint(200, 180), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 180));
+  QElapsedTimer timer;
+  timer.start();
+  while (editor.captureData().source.isNull() && timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (editor.captureData().source.isNull() || editor.selectingForTest() ||
+      editor.renderCurrentOutput().pixelColor(0, 0) !=
+          recapture.pixelColor(40, 40)) {
+    error = QStringLiteral(
+        "A region after an app switch cropped the original foreground");
+    editor.close();
+    return false;
+  }
+
+  const QImage edited = editor.captureData().source.copy();
+  editor.notifyFrontmostAppChangedForTest();
+  application.processEvents();
+  if (editor.selectingForTest() || editor.captureData().source != edited) {
+    error = QStringLiteral(
+        "A frontmost-app change dropped the image already being edited");
+    editor.close();
+    return false;
+  }
+  editor.close();
   return true;
 }
 
@@ -5925,11 +5878,11 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 71;
   }
-  if (!runBackdropCacheRenderingCheck(snapshotError)) {
+  if (!runLiveScrimHoldsStillCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 88;
   }
-  if (!runSelectUndimHoleCheck(snapshotError)) {
+  if (!runSelectLiveHoleCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 96;
   }
@@ -6057,6 +6010,10 @@ int main(int argc, char **argv) {
   if (!runScrollDropsFrozenFrameSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 129;
+  }
+  if (!runFrontmostAppSwitchRecaptureSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 130;
   }
   if (!runLiveSelectionCaptureSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
@@ -6413,15 +6370,13 @@ int main(int argc, char **argv) {
   QTest::mouseMove(&editor, QPoint(200, 160), 20);
   application.processEvents();
   const QImage hoverUi = editor.grab().toImage();
-  if (hoverUi.pixelColor(200, 160) != capture.source.pixelColor(200, 160))
+  if (hoverUi.pixelColor(200, 160).alpha() != 0)
     return 7;
   QTest::keyClick(&editor, Qt::Key_Right, Qt::ControlModifier);
   application.processEvents();
   const QImage keyboardWindowUi = editor.grab().toImage();
-  if (keyboardWindowUi.pixelColor(500, 200) !=
-          capture.source.pixelColor(500, 200) ||
-      keyboardWindowUi.pixelColor(200, 160) ==
-          capture.source.pixelColor(200, 160))
+  if (keyboardWindowUi.pixelColor(500, 200).alpha() != 0 ||
+      keyboardWindowUi.pixelColor(200, 160).alpha() == 0)
     return 8;
   QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
