@@ -65,6 +65,8 @@ add_library(fomosnap-core STATIC
   src/stitch.hpp
   src/auto-capture.cpp
   src/auto-capture.hpp
+  src/startup-timing.cpp
+  src/startup-timing.hpp
   src/editor.cpp
   src/editor.hpp
   ${FOMOSNAP_MAC_SOURCES}
@@ -85,6 +87,34 @@ set_source_files_properties(
   src/mac/mac-scroll-inject.mm
   src/mac/mac-window.mm
   PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
+
+# CXX-only: the Objective-C++ platform layer does not consume this PCH.
+target_precompile_headers(fomosnap-core PRIVATE
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtWidgets/QWidget$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtWidgets/QApplication$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QPainter$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QPainterPath$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QImage$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QPixmap$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QFontDatabase$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QMouseEvent$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QKeyEvent$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtGui/QWheelEvent$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtConcurrent/QtConcurrentRun$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QFutureWatcher$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QProcess$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QFile$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QDir$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QFileInfo$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QJsonObject$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QJsonArray$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QJsonDocument$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QTimer$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QString$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<QtCore/QVector$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<algorithm$<ANGLE-R>>"
+  "$<$<COMPILE_LANGUAGE:CXX>:<cmath$<ANGLE-R>>"
 )
 
 target_include_directories(fomosnap-core PUBLIC
@@ -121,6 +151,7 @@ target_compile_options(fomosnap PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(fomosnap PRIVATE
   FOMOSNAP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fomosnap PRIVATE fomosnap-core)
+target_precompile_headers(fomosnap REUSE_FROM fomosnap-core)
 set_target_properties(fomosnap PROPERTIES
   OUTPUT_NAME "FOMOsnap"
   MACOSX_BUNDLE TRUE
@@ -185,6 +216,7 @@ target_compile_definitions(fomosnap-smoke PRIVATE
   FOMOSNAP_AGENT_LABEL="${FOMOSNAP_AGENT_LABEL}")
 add_dependencies(fomosnap-smoke fomosnap)
 target_link_libraries(fomosnap-smoke PRIVATE fomosnap-core Qt6::Test)
+target_precompile_headers(fomosnap-smoke REUSE_FROM fomosnap-core)
 add_test(NAME fomosnap-smoke COMMAND fomosnap-smoke "${CMAKE_CURRENT_BINARY_DIR}/fomosnap-smoke-output")
 set_tests_properties(fomosnap-smoke PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

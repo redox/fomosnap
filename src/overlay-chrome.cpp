@@ -44,8 +44,8 @@ QColor captureTabAccent(CaptureKind kind) {
 } // namespace
 
 QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
-  static const CaptureKind order[] = {CaptureKind::Region, CaptureKind::Scroll,
-                                      CaptureKind::Window,
+  static const CaptureKind order[] = {CaptureKind::Region, CaptureKind::Window,
+                                      CaptureKind::Scroll,
                                       CaptureKind::Fullscreen};
   const QFontMetricsF metrics(captureTabFont());
   constexpr qreal kPad = 14.0;

@@ -6,6 +6,7 @@
 #include "mac/mac-window.hpp"
 #include "pin.hpp"
 #include "recent-snaps.hpp"
+#include "startup-timing.hpp"
 
 #include <QImageReader>
 #include <QApplication>
@@ -429,10 +430,12 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
 } // namespace
 
 int main(int argc, char **argv) {
+  startupTimingMark("entered main");
   QCoreApplication::setApplicationName(QStringLiteral("fomosnap"));
   QCoreApplication::setApplicationVersion(QString::fromLatin1(FOMOSNAP_VERSION));
   QCoreApplication::setOrganizationName(QStringLiteral("FOMOsnap"));
   QApplication application(argc, argv);
+  startupTimingMark("QApplication constructed");
   mac::installNotificationHandler();
 
   // A stitched scroll capture (or any tall pinned image) exceeds Qt's default
@@ -523,6 +526,7 @@ int main(int argc, char **argv) {
                      "path of an image file to edit."),
       QStringLiteral("[target]"));
   parser.process(application);
+  startupTimingMark("command line parsed");
 
   if (parser.isSet(installAgentOption) || parser.isSet(uninstallAgentOption)) {
     const bool enable = parser.isSet(installAgentOption);
@@ -626,8 +630,10 @@ int main(int argc, char **argv) {
                    "quick output";
     return 2;
   }
+  startupTimingMark("options resolved");
   if (!loadCaptureFonts())
     return 1;
+  startupTimingMark("capture font loaded");
 
   SessionOptions options;
   options.captureMode = captureMode;
@@ -698,6 +704,7 @@ int main(int argc, char **argv) {
     g_hotkeyOptions = options;
     qInfo().noquote()
         << QStringLiteral("FOMOsnap agent ready on %1").arg(hotkeySpec);
+    startupTimingMark("show requested; entering event loop");
     const int code = application.exec();
     mac::unregisterHotkey();
     // Before QApplication goes away: g_session outlives main, and a QWidget
@@ -713,6 +720,7 @@ int main(int argc, char **argv) {
     g_session.stop();
     return code;
   }
+  startupTimingMark("show requested; entering event loop");
   const int exitCode = application.exec();
   g_session.stop();
   return exitCode;

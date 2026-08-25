@@ -323,7 +323,8 @@ bool runMeasurementReadoutCheck(QString &error) {
   QApplication::processEvents();
   if (!expect(QStringLiteral("600 × 440"), QStringLiteral("Hovered window")))
     return false;
-  QTest::keyClick(&editor, Qt::Key_Space);
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
   QApplication::processEvents();
 
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 120));
@@ -5542,20 +5543,21 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
                              "selecting a scrolling region");
       return false;
     }
-    // Space walks Region <-> Window and skips Scroll, which drops the still.
-    QTest::keyClick(&scrollEditor, Qt::Key_Space);
-    if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("Space from scroll mode did not step to window");
-      return false;
-    }
+    // Space walks Region -> Window -> Scroll -> Region. Starting in scroll,
+    // the next step is Region (Fullscreen is skipped).
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
     if (scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("Space from window mode did not return to region");
+      error = QStringLiteral("Space from scroll mode did not step to region");
       return false;
     }
-    QTest::keyClick(&scrollEditor, Qt::Key_S);
+    QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space from region did not step to window");
+      return false;
+    }
+    QTest::keyClick(&scrollEditor, Qt::Key_Space);
     if (!scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("S did not return to scroll mode");
+      error = QStringLiteral("Space from window did not step to scroll");
       return false;
     }
     // A stitched result is handed to the same editor and annotates like any
@@ -6732,12 +6734,14 @@ int main(int argc, char **argv) {
     QTest::mouseMove(&quickEditor, QPoint(650, 470), 20);
     QTest::mouseRelease(&quickEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(650, 470));
+    if (!quickEditor.exportingForTest() || quickEditor.editingForTest())
+      return 74;
     quickEditor.waitForExport();
     const QStringList files =
         QDir(savedRoot).entryList({QStringLiteral("*.png")}, QDir::Files);
     if (quickEditor.isVisible() || files.size() != 1 ||
         QImage(QDir(savedRoot).filePath(files.constFirst())).isNull())
-      return 74;
+      return 75;
   }
   QDir(savedRoot).removeRecursively();
 
@@ -6785,7 +6789,8 @@ int main(int argc, char **argv) {
   if (keyboardWindowUi.pixelColor(500, 200).alpha() != 0 ||
       keyboardWindowUi.pixelColor(200, 160).alpha() == 0)
     return 8;
-  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
+  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,

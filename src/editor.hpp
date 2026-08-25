@@ -133,7 +133,7 @@ public:
   };
 
 private:
-  enum class Phase { Select, Edit };
+  enum class Phase { Select, Export, Edit };
   enum class OutputMode { Copy, Save, Both };
 public:
   enum class Interaction {
@@ -316,6 +316,10 @@ public:
   }
   /// Whether the overlay is still in the select phase. Test accessor.
   [[nodiscard]] bool selectingForTest() const { return phase_ == Phase::Select; }
+  /// Whether a confirmed quick capture is being exported without showing Edit.
+  [[nodiscard]] bool exportingForTest() const { return phase_ == Phase::Export; }
+  /// Whether the annotation editor is visible. Test accessor.
+  [[nodiscard]] bool editingForTest() const { return phase_ == Phase::Edit; }
   /// Cmd+Tab (and any other frontmost-app change) while selecting. Test hook.
   void notifyFrontmostAppChangedForTest();
   /// Sets the stored pointer without moving the system cursor. Test hook.
@@ -468,6 +472,12 @@ private:
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);
+  /// Routes a confirmed screen selection to quick export or the editor.
+  void enterSelectedCapture(QString editStatus);
+  /// A confirmed quick capture exports in place without exposing editor chrome.
+  void enterExport();
+  void ensureTextEditor();
+  [[nodiscard]] bool textEditing() const;
 public:
 
 private:
@@ -624,8 +634,7 @@ private:
   QImage redactionBase_;
   QSize redactionBaseSize_;
   bool redactionBaseStale_ = true;
-  // Select-phase capture scaled once per source, widget size, and DPR.
-  QPixmap backdrop_;
+  // Select-phase capture scaled and dimmed once per source, widget size, and DPR.
   QPixmap dimmedBackdrop_;
   QSize backdropSize_;
   qreal backdropRatio_ = 0.0;
@@ -651,6 +660,7 @@ private:
   bool captureStarted_ = false;
   bool captureForSelection_ = false;
   QString pendingEditStatus_;
+  bool firstPaintReported_ = false;
   CaptureMode pendingMode_ = CaptureMode::Region;
   // Background render for --pin.
   /// Path on success, empty + error set on failure. The render and the PNG
