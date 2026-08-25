@@ -138,7 +138,6 @@ void becomeAccessoryApp() {
 void watchFrontmostApplication(std::function<void()> handler) {
   static id observer = nil;
   static std::function<void()> callback;
-  static pid_t baselinePid = 0;
 
   if (observer) {
     [[[NSWorkspace sharedWorkspace] notificationCenter]
@@ -146,7 +145,6 @@ void watchFrontmostApplication(std::function<void()> handler) {
     observer = nil;
   }
   callback = std::move(handler);
-  baselinePid = 0;
   if (!callback)
     return;
   // Offscreen / minimal QPA have no AppKit activation stream, and a live
@@ -156,10 +154,6 @@ void watchFrontmostApplication(std::function<void()> handler) {
     return;
 
   const pid_t self = ::getpid();
-  NSRunningApplication *front =
-      [NSWorkspace sharedWorkspace].frontmostApplication;
-  baselinePid = front ? front.processIdentifier : 0;
-
   observer = [[[NSWorkspace sharedWorkspace] notificationCenter]
       addObserverForName:NSWorkspaceDidActivateApplicationNotification
                   object:nil
@@ -167,10 +161,7 @@ void watchFrontmostApplication(std::function<void()> handler) {
               usingBlock:^(NSNotification *note) {
                 NSRunningApplication *app =
                     note.userInfo[NSWorkspaceApplicationKey];
-                if (!app || !callback)
-                  return;
-                const pid_t pid = app.processIdentifier;
-                if (pid == self || (baselinePid != 0 && pid == baselinePid))
+                if (!app || !callback || app.processIdentifier == self)
                   return;
                 callback();
               }];

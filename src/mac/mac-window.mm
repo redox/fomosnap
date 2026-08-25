@@ -37,6 +37,25 @@ namespace {
   return view.window;
 }
 
+void enableAlwaysMouseTracking(NSView *view) {
+  if (!view)
+    return;
+  // Qt's own area is ActiveInKeyWindow. After Cmd+Tab another app is key, so
+  // hover moves stop until we ask for them even when inactive.
+  static NSString *const kAlwaysTrack = @"fomosnap.alwaysTrack";
+  for (NSTrackingArea *area in [view.trackingAreas copy]) {
+    if (area.userInfo[kAlwaysTrack])
+      [view removeTrackingArea:area];
+  }
+  NSTrackingArea *area = [[NSTrackingArea alloc]
+      initWithRect:view.bounds
+           options:(NSTrackingMouseMoved | NSTrackingActiveAlways |
+                    NSTrackingInVisibleRect | NSTrackingMouseEnteredAndExited)
+             owner:view
+          userInfo:@{kAlwaysTrack : @YES}];
+  [view addTrackingArea:area];
+}
+
 void stealKeyboard(NSWindow *native) {
   if (!native)
     return;
@@ -53,6 +72,7 @@ void stealKeyboard(NSWindow *native) {
   }
   [native makeKeyAndOrderFront:nil];
   [native makeFirstResponder:native.contentView];
+  enableAlwaysMouseTracking(native.contentView);
 }
 
 void releaseKeyboard(NSWindow *native) {

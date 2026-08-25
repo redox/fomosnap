@@ -20,6 +20,7 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <QCursor>
 #include <QDebug>
 #include <QDir>
 #include <QElapsedTimer>
@@ -5882,9 +5883,9 @@ bool runScrollDropsFrozenFrameSmoke(QApplication &application, QString &error) {
 }
 
 /** Cmd+Tab (or any frontmost-app change) must drop the hotkey still so the
- *  committed crop is the app now under the overlay. Production change that
- *  would fail this: the still stays set and enterEdit crops the original
- *  foreground. */
+ *  committed crop is the app now under the overlay, and must resync the
+ *  crosshair from the real pointer. Production change that would fail this:
+ *  the still stays set, or cursor_ stays at the last mouseMoveEvent. */
 bool runFrontmostAppSwitchRecaptureSmoke(QApplication &application,
                                          QString &error) {
   CaptureData capture;
@@ -5922,8 +5923,46 @@ bool runFrontmostAppSwitchRecaptureSmoke(QApplication &application,
   editor.resize(320, 240);
   editor.show();
   application.processEvents();
-  editor.notifyFrontmostAppChangedForTest();
+  QCursor::setPos(editor.mapToGlobal(QPoint(200, 150)));
   application.processEvents();
+  editor.setPointerForTest(QPointF(40, 40));
+  if (editor.measurementText() != QStringLiteral("40, 40")) {
+    error = QStringLiteral("Idle pointer readout was \"%1\", expected 40, 40")
+                .arg(editor.measurementText());
+    editor.close();
+    return false;
+  }
+  editor.notifyFrontmostAppChangedForTest();
+  if (editor.measurementText() != QStringLiteral("200, 150")) {
+    error = QStringLiteral(
+                "App switch left the crosshair frozen: readout \"%1\"")
+                .arg(editor.measurementText());
+    editor.close();
+    return false;
+  }
+  // After Cmd+Tab the overlay is no longer the key window, so Qt stops
+  // delivering hover moves. The stored pointer must still track QCursor.
+  editor.setPointerForTest(QPointF(40, 40));
+  if (editor.measurementText() != QStringLiteral("40, 40")) {
+    error = QStringLiteral("Could not stale the pointer after the app switch");
+    editor.close();
+    return false;
+  }
+  QElapsedTimer followTimer;
+  followTimer.start();
+  while (editor.measurementText() == QStringLiteral("40, 40") &&
+         followTimer.elapsed() < 250) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (editor.measurementText() != QStringLiteral("200, 150")) {
+    error = QStringLiteral(
+                "Pointer stayed frozen after Cmd+Tab with no mouseMoveEvent: "
+                "readout \"%1\"")
+                .arg(editor.measurementText());
+    editor.close();
+    return false;
+  }
   if (!editor.selectingForTest() || !editor.captureData().source.isNull()) {
     error = QStringLiteral(
         "A frontmost-app change left the original hotkey still in place");
