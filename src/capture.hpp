@@ -268,6 +268,10 @@ void prunePinnedSnapshots();
  * quality knob, which maps inversely onto zlib levels: -1 keeps the default
  * level, higher values compress less and encode faster.
  */
+/** Saves a pinned snapshot plus a sidecar log recording the logical size,
+ *  so editing the pin later reopens at the captured scale. */
+[[nodiscard]] bool savePinnedSnapshot(const QImage &image, const QString &path,
+                                      const QSize &logicalSize, QString &error);
 [[nodiscard]] bool saveTemporarySnapshot(const QImage &image, QString path,
                                          QString &error, int quality = -1);
 [[nodiscard]] QString recognizeText(const QImage &image, QString &error);

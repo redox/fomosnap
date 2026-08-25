@@ -24,8 +24,31 @@ bool runPinLifecycleSmoke(QString &error) {
 
   QImage image(8, 8, QImage::Format_ARGB32_Premultiplied);
   image.fill(Qt::white);
+
+  // Editing a pinned snapshot reopens at the captured scale: the pin save
+  // records the logical size in a sidecar the file editor reads back.
+  const QString scaledPath = pinnedSnapshotPath(987660);
+  if (!savePinnedSnapshot(image, scaledPath, QSize(4, 4), error))
+    return false;
+  OperationLog sidecar;
+  if (!loadOperationLog(operationLogPath(scaledPath), sidecar, error)) {
+    QFile::remove(scaledPath);
+    return false;
+  }
+  CaptureData reopened;
+  describeFileCapture(reopened, QImage(scaledPath), sidecar);
+  const bool scaleRestored = qFuzzyCompare(reopened.monitor.scale, 2.0) &&
+                             reopened.previewSize == QSize(4, 4);
+  QFile::remove(scaledPath);
+  QFile::remove(operationLogPath(scaledPath));
+  if (!scaleRestored) {
+    error = QStringLiteral(
+        "Pinned snapshot sidecar did not restore the captured scale");
+    return false;
+  }
+
   const QString closePath = pinnedSnapshotPath(987656);
-  if (!saveTemporarySnapshot(image, closePath, error))
+  if (!savePinnedSnapshot(image, closePath, QSize(4, 4), error))
     return false;
   {
     PinSnapshotFile file(closePath);
@@ -38,6 +61,11 @@ bool runPinLifecycleSmoke(QString &error) {
   if (QFileInfo::exists(closePath)) {
     error = QStringLiteral("Normal pin close did not remove its snapshot");
     QFile::remove(closePath);
+    return false;
+  }
+  if (QFileInfo::exists(operationLogPath(closePath))) {
+    error = QStringLiteral("Pin close left its scale sidecar behind");
+    QFile::remove(operationLogPath(closePath));
     return false;
   }
 
@@ -101,7 +129,7 @@ bool runPinLifecycleSmoke(QString &error) {
   QFile::remove(lockedPath);
 
   const QString reopenPath = pinnedSnapshotPath(987657);
-  if (!saveTemporarySnapshot(image, reopenPath, error))
+  if (!savePinnedSnapshot(image, reopenPath, QSize(4, 4), error))
     return false;
   {
     PinSnapshotFile file(reopenPath);
@@ -112,11 +140,15 @@ bool runPinLifecycleSmoke(QString &error) {
     }
     file.preserveForEditor();
   }
-  if (!QFileInfo::exists(reopenPath)) {
-    error = QStringLiteral("Reopened pin snapshot was not preserved");
+  if (!QFileInfo::exists(reopenPath) ||
+      !QFileInfo::exists(operationLogPath(reopenPath))) {
+    error = QStringLiteral("Reopened pin snapshot was not fully preserved");
+    QFile::remove(reopenPath);
+    QFile::remove(operationLogPath(reopenPath));
     return false;
   }
   QFile::remove(reopenPath);
+  QFile::remove(operationLogPath(reopenPath));
 
   const QString unrelatedPath =
       QDir(secureRuntimeDirectory()).filePath(QStringLiteral("manual.png"));

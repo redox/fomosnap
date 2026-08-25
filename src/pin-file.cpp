@@ -35,8 +35,10 @@ PinSnapshotFile::~PinSnapshotFile() {
   const QFileInfo fileInfo(path_);
   const QString runtime = secureRuntimeDirectory();
   if (lastOwner && !runtime.isEmpty() && fileInfo.absolutePath() == runtime &&
-      internalName.match(fileInfo.fileName()).hasMatch())
+      internalName.match(fileInfo.fileName()).hasMatch()) {
     QFile::remove(path_);
+    QFile::remove(operationLogPath(path_));
+  }
   ::close(fd_);
 }
 
