@@ -6,6 +6,7 @@
 #include "icons.hpp"
 #include "eyedropper.hpp"
 #include "mac/mac-platform.hpp"
+#include "mac/mac-window.hpp"
 #include "output-config.hpp"
 #include "overlay-chrome.hpp"
 #include "palette-config.hpp"
@@ -41,6 +42,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QWheelEvent>
+#include <QWindow>
 
 #include <algorithm>
 #include <cmath>
@@ -84,6 +86,7 @@ constexpr qreal kToolbarWidth = 840;
 constexpr qreal kToolbarImageGap = 46;
 constexpr qreal kMinimumRedactionExtent = 5.0;
 constexpr int kBackdropDim = 143;
+constexpr int kPointerSyncMs = 16;
 
 /// Beside the snapshots and the instance lock, in the private runtime dir.
 /// Session scratch, not configuration: gone at reboot, and a region only
@@ -866,6 +869,17 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   if (mode != CaptureMode::File) {
     mac::watchFrontmostApplication(
         [this] { onFrontmostApplicationChanged(); });
+    pointerSyncTimer_.setInterval(kPointerSyncMs);
+    connect(&pointerSyncTimer_, &QTimer::timeout, this, [this] {
+      if (phase_ != Phase::Select || dragging_)
+        return;
+      const QPointF now = mapFromGlobal(QCursor::pos());
+      if (now.toPoint() == cursor_.toPoint())
+        return;
+      syncPointerFromGlobal();
+    });
+    if (phase_ == Phase::Select)
+      pointerSyncTimer_.start();
   }
   updatePointerCursor();
 }
@@ -2533,6 +2547,7 @@ void CaptureEditor::startCapture(CaptureMode mode, bool includeWindows,
 }
 
 void CaptureEditor::enterEdit(QString status) {
+  pointerSyncTimer_.stop();
   phase_ = Phase::Edit;
   tool_ = Tool::Select;
   viewZoom_ = 1.0;
@@ -4705,10 +4720,29 @@ void CaptureEditor::notifyFrontmostAppChangedForTest() {
   onFrontmostApplicationChanged();
 }
 
+void CaptureEditor::setPointerForTest(const QPointF &point) {
+  cursor_ = point;
+  update();
+}
+
 void CaptureEditor::onFrontmostApplicationChanged() {
   if (phase_ != Phase::Select)
     return;
   releaseFrozenCapture();
+  if (QWindow *window = windowHandle())
+    macwindow::activate(window);
+  syncPointerFromGlobal();
+}
+
+void CaptureEditor::syncPointerFromGlobal() {
+  if (!dragging_)
+    cursor_ = mapFromGlobal(QCursor::pos());
+  if (windowMode_)
+    hoveredWindow_ = recentsOpen_ ? -1 : windowAt(cursor_);
+  if (!dragging_) {
+    trackRecentsHover();
+    updatePointerCursor();
+  }
   update();
 }
 
@@ -4924,6 +4958,8 @@ void CaptureEditor::returnToSelect(bool windowMode) {
     liveSelection_ = true;
   }
   phase_ = Phase::Select;
+  if (captureMode_ != CaptureMode::File)
+    pointerSyncTimer_.start();
   tool_ = Tool::Select;
   viewZoom_ = 1.0;
   viewOffset_ = {};
