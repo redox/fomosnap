@@ -164,6 +164,8 @@ qt_add_executable(fomosnap-smoke
   tests/session-exit-smoke.hpp
   tests/cut-smoke.cpp
   tests/cut-smoke.hpp
+  tests/cut-mapping-smoke.cpp
+  tests/cut-mapping-smoke.hpp
   tests/palette-config-smoke.cpp
   tests/palette-config-smoke.hpp
   tests/pin-lifecycle-smoke.cpp
