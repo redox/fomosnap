@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QProcess>
 #include <QSaveFile>
 #include <QStandardPaths>
@@ -132,6 +133,47 @@ void becomeAccessoryApp() {
   // switched to, and a Dock icon would only be one more thing to dismiss.
   [[NSApplication sharedApplication]
       setActivationPolicy:NSApplicationActivationPolicyAccessory];
+}
+
+void watchFrontmostApplication(std::function<void()> handler) {
+  static id observer = nil;
+  static std::function<void()> callback;
+  static pid_t baselinePid = 0;
+
+  if (observer) {
+    [[[NSWorkspace sharedWorkspace] notificationCenter]
+        removeObserver:observer];
+    observer = nil;
+  }
+  callback = std::move(handler);
+  baselinePid = 0;
+  if (!callback)
+    return;
+  // Offscreen / minimal QPA have no AppKit activation stream, and a live
+  // workspace observer would flake the headless suite if the developer
+  // Cmd+Tab'd during make check.
+  if (QGuiApplication::platformName() != QLatin1String("cocoa"))
+    return;
+
+  const pid_t self = ::getpid();
+  NSRunningApplication *front =
+      [NSWorkspace sharedWorkspace].frontmostApplication;
+  baselinePid = front ? front.processIdentifier : 0;
+
+  observer = [[[NSWorkspace sharedWorkspace] notificationCenter]
+      addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *note) {
+                NSRunningApplication *app =
+                    note.userInfo[NSWorkspaceApplicationKey];
+                if (!app || !callback)
+                  return;
+                const pid_t pid = app.processIdentifier;
+                if (pid == self || (baselinePid != 0 && pid == baselinePid))
+                  return;
+                callback();
+              }];
 }
 
 /// Absolute path of the executable inside this app bundle. The plist needs an

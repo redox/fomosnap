@@ -317,6 +317,8 @@ public:
   [[nodiscard]] bool exportingForTest() const { return phase_ == Phase::Export; }
   /// Whether the annotation editor is visible. Test accessor.
   [[nodiscard]] bool editingForTest() const { return phase_ == Phase::Edit; }
+  /// Cmd+Tab (and any other frontmost-app change) while selecting. Test hook.
+  void notifyFrontmostAppChangedForTest();
   /// Widget rect of the capture-kind tab with `label`, or null. Test accessor.
   [[nodiscard]] QRectF selectTabRectForTest(const QString &label) const {
     for (const CaptureTab &item : selectTabItems())
@@ -416,6 +418,7 @@ private:
   void setScrollMode(bool enabled);
   /// Drops a hotkey-frozen still so the select overlay is a scrim over the
   /// live desktop. Scroll capture needs that; region/window/fullscreen do not.
+  void onFrontmostApplicationChanged();
   void releaseFrozenCapture();
   void selectFullscreen();
   /// Back from the editor to the select phase: the op log is dropped. A

@@ -8,6 +8,8 @@
 #include <QStringList>
 #include <QVector>
 
+#include <functional>
+
 class QImage;
 class QWindow;
 struct MonitorInfo;
@@ -67,6 +69,12 @@ void installNotificationHandler();
 /** Hides the Dock icon and the menu bar: FOMOsnap is an overlay, not an app
  *  you switch to. */
 void becomeAccessoryApp();
+
+/** Invokes `handler` on the main thread when a different application becomes
+ *  frontmost. FOMOsnap itself is ignored: the overlay is a nonactivating
+ *  panel and must not count as a switch. A null handler removes the watch.
+ *  Only one watch is held. */
+void watchFrontmostApplication(std::function<void()> handler);
 
 /** Registers/removes the login item that starts the resident agent. */
 [[nodiscard]] bool setLaunchAtLogin(bool enabled, QString &error);
