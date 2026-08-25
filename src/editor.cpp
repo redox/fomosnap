@@ -668,6 +668,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   connect(&finishWatcher_, &QFutureWatcher<FinishResult>::finished, this,
           [this] { completeFinish(finishWatcher_.result()); });
 
+  connect(&reopenWatcher_, &QFutureWatcher<ReopenResult>::finished, this,
+          [this] { completeReopenRecent(reopenWatcher_.result()); });
+
   connect(&snapshotWatcher_, &QFutureWatcher<bool>::finished, this, [this] {
     snapshotBusy_ = false;
     snapshotWriteOk_ = snapshotWatcher_.result();
@@ -756,21 +759,19 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
             emit captureReady(true, {});
           });
 
-  connect(&pinWatcher_, &QFutureWatcher<QImage>::finished, this, [this] {
+  connect(&pinWatcher_, &QFutureWatcher<PinResult>::finished, this, [this] {
     pinPending_ = false;
-    const QString path = pendingPinPath_;
-    const QImage image = pinWatcher_.result();
-    QString error;
-    if (image.isNull() || !saveTemporarySnapshot(image, path, error)) {
+    const PinResult result = pinWatcher_.result();
+    if (result.path.isEmpty()) {
       --pinCount_;
-      setStatus(error.isEmpty()
+      setStatus(result.error.isEmpty()
                     ? QStringLiteral("Could not render pinned capture")
-                    : error);
+                    : result.error);
       return;
     }
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
-                                 {QStringLiteral("--pin"), path})) {
-      QFile::remove(path);
+                                 {QStringLiteral("--pin"), result.path})) {
+      QFile::remove(result.path);
       --pinCount_;
       setStatus(QStringLiteral("Could not start pinned capture"));
       return;
@@ -2502,6 +2503,15 @@ void CaptureEditor::waitForExport() {
     QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 }
 
+void CaptureEditor::waitForReopen() {
+  while (reopenWatcher_.isRunning()) {
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    QThread::yieldCurrentThread();
+  }
+  for (int pass = 0; pass < 3; ++pass)
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+}
+
 void CaptureEditor::pinSnapshot() {
   if (busy_ || pinPending_ || selection_.isEmpty())
     return;
@@ -2513,7 +2523,6 @@ void CaptureEditor::pinSnapshot() {
     setStatus(QStringLiteral("Could not create private runtime directory"));
     return;
   }
-  pendingPinPath_ = path;
   pinPending_ = true;
   setStatus(QStringLiteral("Preparing pinned capture…"));
   const CaptureData captureCopy = capture_;
@@ -2521,8 +2530,17 @@ void CaptureEditor::pinSnapshot() {
   const QRectF selection = selection_;
   const BackgroundStyle background = backgroundStyle_;
   pinWatcher_.setFuture(QtConcurrent::run(
-      [captureCopy, annotations, selection, background] {
-        return renderCapture(captureCopy, selection, annotations, background);
+      [captureCopy, annotations, selection, background, path] {
+        PinResult result;
+        const QImage image =
+            renderCapture(captureCopy, selection, annotations, background);
+        if (image.isNull() || !saveTemporarySnapshot(image, path, result.error)) {
+          if (result.error.isEmpty())
+            result.error = QStringLiteral("Could not render pinned capture");
+          return result;
+        }
+        result.path = path;
+        return result;
       }));
 }
 
@@ -5236,27 +5254,41 @@ void CaptureEditor::paintRecents(QPainter &painter) {
 }
 
 void CaptureEditor::reopenRecent(int index) {
-  if (index < 0 || index >= recents_.size())
+  if (index < 0 || index >= recents_.size() || reopenPending_)
     return;
   // The earlier working document opens here, in place of a new capture:
   // same surface, layers still editable. Nothing was captured yet, so there
-  // is no snapshot to clean up.
+  // is no snapshot to clean up. A shelved capture can be a stitched scroll
+  // result tens of megapixels large, so the decode runs on the worker pool
+  // rather than blocking the click that asked for it.
   const RecentSnap recent = recents_.at(index);
-  QImage image;
-  if (!image.load(recent.sourcePath)) {
-    setStatus(QStringLiteral("Could not load that capture"));
-    return;
-  }
-  OperationLog log;
-  QString error;
-  if (!recent.logPath.isEmpty() &&
-      !loadOperationLog(recent.logPath, log, error)) {
-    setStatus(QStringLiteral("Could not restore its layers: %1").arg(error));
-    return;
-  }
+  reopenPending_ = true;
   setRecentsOpen(false);
-  editingRecent_ = recent;
-  adoptImage(std::move(image), std::move(log), SelectTab::Region,
+  setStatus(QStringLiteral("Opening…"));
+  reopenWatcher_.setFuture(QtConcurrent::run([recent] {
+    ReopenResult result;
+    result.recent = recent;
+    if (!result.image.load(recent.sourcePath)) {
+      result.error = QStringLiteral("Could not load that capture");
+      return result;
+    }
+    if (!recent.logPath.isEmpty() &&
+        !loadOperationLog(recent.logPath, result.log, result.error))
+      result.image = {};
+    return result;
+  }));
+}
+
+void CaptureEditor::completeReopenRecent(const ReopenResult &result) {
+  reopenPending_ = false;
+  if (result.image.isNull()) {
+    setStatus(result.error.isEmpty()
+                  ? QStringLiteral("Could not restore that capture")
+                  : result.error);
+    return;
+  }
+  editingRecent_ = result.recent;
+  adoptImage(result.image, result.log, SelectTab::Region,
              QStringLiteral("Reopened recent capture · Copy/Save to output"));
 }
 

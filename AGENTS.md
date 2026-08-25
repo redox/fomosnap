@@ -12,11 +12,38 @@ that touches the system was replaced.
 
 ## Project principles
 
+Each of these has a longer writeup under `docs/` — read it before making a
+change that touches the principle, not just this summary.
+
+- **A specialized tool, not a general app.** FOMOsnap does one job — capture,
+  annotate, output — and does it fast. It is not a drawing program, not a
+  file manager, not a general desktop utility. A feature that isn't in
+  service of "screenshot, mark it up, send it somewhere" doesn't belong
+  here, however useful it might be on its own.
+- **The main thread never blocks.** Capture, paint, and input handling are
+  the UI thread's whole job. Disk I/O on a full-resolution image, spawning
+  a process, PNG encoding — all of it runs on a worker via
+  `QtConcurrent`/`QFutureWatcher`, never inline. See
+  [docs/threading.md](docs/threading.md).
+- **Every operation is undoable.** The operation log is the source of
+  truth; the visible image is rebuilt from it. Rendering for editing is a
+  pure, repeatable function of that log — nothing is baked into the working
+  image as you draw. Output is applied only on **Copy**, **Save**, or both,
+  which is the one moment a flattened image is produced. Redaction is the
+  deliberate, documented exception: it must actually destroy pixels at
+  render time so nothing recoverable leaks into an export, while remaining
+  a normal, undoable log entry until you export. See
+  [docs/editing-model.md](docs/editing-model.md).
+- **Minimally configurable.** No settings UI, no wizards, no onboarding.
+  The defaults are the product; a config key is a narrow escape hatch for a
+  real divergent need (where to save, what to name it, preset colors),
+  never a general mechanism.
 - **Speed first.** The tool must feel instant: capture, annotate, copy. No
-  startup bloat, no settings UI, no wizards. The resident agent exists so the
-  overlay costs nothing at press time.
+  startup bloat. The resident agent exists so the overlay costs nothing at
+  press time.
 - **macOS only.** Requires macOS 14 or newer. No Wayland, no X11, no Windows,
-  and no abstraction layer kept around for a platform we do not ship.
+  and no abstraction layer kept around for a platform we do not ship. See
+  [docs/platform-scope.md](docs/platform-scope.md).
 - **No backwards compatibility.** Break keybindings, CLI flags, file formats,
   or internals whenever it keeps the code simpler or the tool faster. Do not
   add compatibility shims, deprecation aliases, or migration code.
@@ -24,6 +51,7 @@ that touches the system was replaced.
   Vision for OCR rather than tesseract, `UNUserNotificationCenter` for
   notifications, `NSPasteboard` through `QClipboard` for the clipboard. The UI
   stays vector-drawn with the bundled Neucha font and no icon-theme dependency.
+  See [docs/dependencies.md](docs/dependencies.md).
 - **Single binary.** Everything (capture, editor, pin, agent) runs from the one
   executable inside `FOMOsnap.app`.
 - **The platform layer is quarantined.** Only `src/mac/*.mm` may include an
@@ -44,11 +72,13 @@ that touches the system was replaced.
 | `src/instance-lock.cpp/.hpp` | Single-instance handover: cancel a running overlay, or stop it and take over |
 | `src/capture.cpp/.hpp` | Capture, rendering, output, and source+JSON operation-log persistence |
 | `src/editor.cpp/.hpp` | Annotation editor: tools, vector layers, operation-log undo/redo, export |
+| `src/overlay-chrome.cpp/.hpp` | Shared chrome every overlay wears: the capture-kind tab strip, hotkey legend, status pill |
 | `src/pin.cpp/.hpp` | Pinned-capture windows (floating, on every Space) |
 | `src/scroll-capture.cpp/.hpp`, `src/scroll-inject.hpp` | Scroll-capture overlay and auto-scroll worker |
 | `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly |
 | `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/FOMOsnap.icns` |
 | `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including process-lifetime checks that run the real executable |
+| `docs/` | Longer writeups of the principles above — read before changing behavior they cover |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(fomosnap VERSION ...)`) |
 
 ## Permissions
@@ -99,7 +129,8 @@ Always run `make check` after behavioural changes. CI
 (`.github/workflows/build-macos.yml`) runs the same build and smoke on every
 push and PR.
 
-Dependencies: Xcode command-line tools and `brew install qt ninja`.
+Dependencies: Xcode command-line tools and `brew install qt ninja`. See
+[docs/dependencies.md](docs/dependencies.md) before adding to this list.
 
 ### Testing what cannot be faked
 

@@ -73,6 +73,11 @@ public:
    * event loop run so completeFinish() can act. Headless smoke suite only.
    */
   void waitForExport();
+  /**
+   * Blocks until an in-flight recents-shelf reopen has completed, letting
+   * the event loop run. Headless smoke suite only.
+   */
+  void waitForReopen();
   /** Renders the current selection and layer data for headless verification. */
   [[nodiscard]] QImage renderCurrentOutput() const;
   /**
@@ -180,6 +185,15 @@ private:
     QString error;
     /// Small flattened preview for the recents shelf.
     QImage thumbnail;
+  };
+  /// What reopening a shelved capture reads off disk: the full-resolution
+  /// source plus its operation log. Loaded on the worker pool, not the UI
+  /// thread, since a shelved stitched capture can be tens of megapixels.
+  struct ReopenResult {
+    RecentSnap recent;
+    QImage image;
+    OperationLog log;
+    QString error;
   };
 
   struct EditState {
@@ -416,6 +430,7 @@ private:
   void trackRecentsHover();
   void paintRecents(QPainter &painter);
   void reopenRecent(int index);
+  void completeReopenRecent(const ReopenResult &result);
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void enterEdit(QString status);
@@ -604,9 +619,15 @@ private:
   QString pendingEditStatus_;
   CaptureMode pendingMode_ = CaptureMode::Region;
   // Background render for --pin.
-  QFutureWatcher<QImage> pinWatcher_;
+  /// Path on success, empty + error set on failure. The render and the PNG
+  /// write both happen in the worker; nothing but launching the pin process
+  /// happens back on the UI thread.
+  struct PinResult {
+    QString path;
+    QString error;
+  };
+  QFutureWatcher<PinResult> pinWatcher_;
   bool pinPending_ = false;
-  QString pendingPinPath_;
   QVector<Annotation> annotations_;
   QVector<Operation> ops_;
   int opIndex_ = 0;
@@ -648,6 +669,8 @@ private:
   QColor textColor_;
   QFutureWatcher<OcrResult> ocrWatcher_;
   QFutureWatcher<FinishResult> finishWatcher_;
+  QFutureWatcher<ReopenResult> reopenWatcher_;
+  bool reopenPending_ = false;
   /// The region being read (annotation coordinates). While tesseract runs a
   /// scan band sweeps it; once done the recognized text sits over it for a
   /// few seconds (or until the next click/key) so you can see what was copied.
