@@ -407,7 +407,7 @@ tesseract codes (`eng`, `deu`, `jpn`) for the common languages. Defaults to
 
 The desktop remains live under the dimmed selection overlay while FOMOsnap owns
 input. Tabs across the top of the overlay switch the capture kind: **Region**,
-**Scrolling Region**, **Window**, **Fullscreen**. All four are modes of the
+**Window**, **Scrolling Region**, **Fullscreen**. All four are modes of the
 same overlay. Scrolling Region selects exactly like Region; once the region is
 drawn, the page inside it goes live and the scroll controls appear in place.
 The tabs stay up in the editor too: a tab there drops the edit and goes back to
@@ -418,7 +418,7 @@ without reaching for the pointer.
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Toggle Region and Window (Scrolling Region is `S` or the tab) |
+| `Space` | Step through the capture-kind tabs (Region, Window, Scrolling Region) |
 | `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `Cmd+Arrow` | Move among windows in window mode |
@@ -518,6 +518,15 @@ in-process tests cannot reach.
 
 `make icon` redraws `assets/FOMOsnap.icns` from `tools/icon-generator.cpp`; the
 icon is vector-drawn at every size rather than downscaled from one bitmap.
+
+For live launch profiling, the binary has an opt-in millisecond trace from
+`main()` through the first completed overlay paint:
+
+```bash
+FOMOSNAP_PROFILE_STARTUP=1 ./build/FOMOsnap.app/Contents/MacOS/FOMOsnap 2>startup.log
+```
+
+The trace is completely silent by default.
 
 `.github/workflows/build-macos.yml` runs the same `make check` build, smoke
 suite, and available static-analysis checks on a macOS runner, stages the app

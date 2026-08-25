@@ -53,11 +53,10 @@ lint: build
 		trap 'rm -rf "$$commands_dir"' EXIT; \
 		cp "$(BUILD_DIR)/compile_commands.json" \
 			"$$commands_dir/compile_commands.json"; \
-		for source in $(LINT_SOURCES); do \
+		printf '%s\n' $(LINT_SOURCES) | xargs -P "$$(sysctl -n hw.ncpu)" -n 1 \
 			"$(CLANG_TIDY)" -p "$$commands_dir" \
-				--extra-arg=-isysroot --extra-arg="$(SDKROOT_PATH)" \
-				-checks="$(LINT_CHECKS)" -header-filter='.*' "$$source"; \
-		done; \
+			--extra-arg=-isysroot --extra-arg="$(SDKROOT_PATH)" \
+			-checks="$(LINT_CHECKS)" -header-filter='.*'; \
 	else \
 		echo "make check: clang-tidy unavailable; skipping"; \
 	fi

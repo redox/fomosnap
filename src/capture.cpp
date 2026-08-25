@@ -2,6 +2,7 @@
 #include "capture.hpp"
 #include "mac/mac-platform.hpp"
 #include "output-config.hpp"
+#include "startup-timing.hpp"
 
 #include <QBuffer>
 #include <QClipboard>
@@ -685,12 +686,14 @@ bool probeFocusedMonitor(MonitorInfo &monitor, QString &error) {
               qRound(monitor.geometry.height() * monitor.scale));
     return true;
   }
+  StartupTimingScope timing("focused display discovery");
   return mac::focusedDisplay(monitor, error);
 }
 
 bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
                           bool includeWindows, QString &error,
                           bool excludeOwnWindows) {
+  StartupTimingScope timing("monitor pixels + window discovery");
   capture.monitor = monitor;
   const QRect geometry = capture.monitor.geometry;
   if (geometry.size().isEmpty()) {
@@ -712,6 +715,7 @@ bool captureMonitorPixels(const MonitorInfo &monitor, CaptureData &capture,
       error = QStringLiteral("Screen capture failed: %1").arg(error);
     return false;
   }
+  startupTimingMark("output pixels available");
 
   capture.previewSize = geometry.size();
 
