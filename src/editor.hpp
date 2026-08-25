@@ -285,6 +285,23 @@ public:
   [[nodiscard]] bool shapeMenuOpenForTest() const { return shapeMenuOpen_; }
   /// Whether window selection is active in the select phase. Test accessor.
   [[nodiscard]] bool windowModeForTest() const { return windowMode_; }
+  /// Where the image is drawn on screen right now (widget pixels), and the
+  /// annotation-space-to-widget scale. Test accessor: lets a test compute
+  /// exact click/expectation points from real geometry instead of hand math.
+  [[nodiscard]] QRectF editImageRectForTest() const { return editImageRect(); }
+  [[nodiscard]] qreal editScaleForTest() const { return editScale(); }
+  /// Center of the toolbar button whose action is `action` (e.g.
+  /// "tool-arrow"), or (-1,-1) if not found. Test accessor: a click position
+  /// that survives the toolbar's own layout changing.
+  [[nodiscard]] QPoint toolbarButtonCenterForTest(const QString &action) const {
+    for (const ToolbarButton &button : toolbarButtons())
+      if (button.action == action)
+        return button.rect.center().toPoint();
+    return {-1, -1};
+  }
+  [[nodiscard]] QRectF textSizePanelRectForTest() const {
+    return textSizePanelRect();
+  }
   /// Whether the overlay is still in the select phase. Test accessor.
   [[nodiscard]] bool selectingForTest() const { return phase_ == Phase::Select; }
   /// Cmd+Tab (and any other frontmost-app change) while selecting. Test hook.
@@ -331,9 +348,14 @@ private:
   [[nodiscard]] int cropHandleAt(const QPointF &point) const;
   /// Fit-to-window rect for the selection (unaffected by the view zoom/pan).
   [[nodiscard]] QRectF baseImageRect() const;
-  /// Top edge the chrome (toolbar, popovers) anchors above: the fit rect at
-  /// zoom 1, the viewport band once zoomed (the content fills it then).
-  [[nodiscard]] qreal chromeAnchorTop() const;
+  /// Bottom of the capture-kind tab strip, including the display safe area.
+  [[nodiscard]] qreal tabStripBottom() const;
+  /// Top of the toolbar row: just above the screenshot, floored so it cannot
+  /// overlap the tab strip.
+  [[nodiscard]] qreal toolbarTop() const;
+  /// How much vertical room the tab strip and toolbar actually need, at the
+  /// current window width — the image's top margin, not a guessed constant.
+  [[nodiscard]] qreal imageTopMargin() const;
   /// baseImageRect transformed by the current view zoom and pan (content and
   /// annotations map through this). Equals baseImageRect at zoom 1.
   [[nodiscard]] QRectF editImageRect() const;

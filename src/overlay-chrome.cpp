@@ -51,11 +51,14 @@ QVector<CaptureTab> captureTabLayout(const QRect &bounds) {
   constexpr qreal kPad = 14.0;
   constexpr qreal kGap = 2.0;
   constexpr qreal kHeight = 26.0;
+  // A few pixels under the usable top, so the pills sit below a notch
+  // rather than against the camera housing.
+  constexpr qreal kTop = 5.0;
   QVector<CaptureTab> tabs;
   qreal total = 0.0;
   for (const CaptureKind kind : order) {
     const qreal w = metrics.horizontalAdvance(captureTabLabel(kind)) + 2 * kPad;
-    tabs.push_back({kind, QRectF(total, 5.0, w, kHeight)});
+    tabs.push_back({kind, QRectF(total, kTop, w, kHeight)});
     total += w + kGap;
   }
   total -= kGap;
@@ -78,13 +81,17 @@ int captureTabAt(const QVector<CaptureTab> &tabs, const QPointF &position) {
 }
 
 void drawCaptureTabs(QPainter &painter, const QVector<CaptureTab> &tabs,
-                     CaptureKind active, const QPointF &cursor) {
+                     CaptureKind active, const QPointF &cursor,
+                     const QRect &bounds) {
   if (tabs.isEmpty())
     return;
-  // Hangs off the top edge like a tab strip: square at the top (drawn past
-  // the edge so only the bottom corners round), not a floating pill.
-  const QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
-                         .adjusted(-5, -30, 5, 5);
+  // Hangs off the usable top like a tab strip: square at that edge (drawn
+  // past it so only the bottom corners round). Clipped to `bounds` so a
+  // notched display does not get a slab behind the camera housing.
+  QRectF bar = tabs.constFirst().rect.united(tabs.constLast().rect)
+                   .adjusted(-5, -30, 5, 5);
+  if (bar.top() < bounds.top())
+    bar.setTop(bounds.top());
   painter.setPen(QPen(QColor(255, 255, 255, 32), 1));
   painter.setBrush(QColor(18, 18, 22, 235));
   painter.drawRoundedRect(bar, 12, 12);
@@ -145,8 +152,6 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
   const int rows = (entries.size() + columns - 1) / columns;
   QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
   font.setPixelSize(11);
-  // Measured, not guessed: a fixed-width card clipped the longer lines, and a
-  // guide that trails off mid-word is worse than no guide.
   const QFontMetricsF metrics(font);
   constexpr qreal keyGap = 12;    // between a key and what it does
   constexpr qreal columnGap = 24; // between the two columns
@@ -183,19 +188,12 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
     }
     return count;
   };
-  // Flip away from the pointer, but not onto a selected handle. Adding Cut
-  // grew the card far enough that a line-select click near mid-canvas moved
-  // it over the start handle.
   const bool cursorWantsLeft =
       right.adjusted(-28, -28, 28, 28).contains(cursor);
   QRectF panel = cursorWantsLeft ? left : right;
   const QRectF other = cursorWantsLeft ? right : left;
   if (hiddenCount(panel) > hiddenCount(other))
     panel = other;
-  // The flip exists so the guide never sits on what the pointer is doing.
-  // When both positions would still cover the pointer and no handle pins the
-  // card in place, there is nowhere honest to put it: step aside entirely.
-  // On any real monitor the two positions cannot both reach the pointer.
   if (keepVisible.isEmpty() &&
       panel.adjusted(-28, -28, 28, 28).contains(cursor) &&
       other.adjusted(-28, -28, 28, 28).contains(cursor))
