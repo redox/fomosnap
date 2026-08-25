@@ -312,8 +312,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("one")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -334,8 +333,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("rotated")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(320, 180), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -392,8 +390,7 @@ bool runSelectUndimHoleCheck(QString &error) {
         {{{windowRect}, QStringLiteral("w1"), QStringLiteral("hidpi")}});
     CaptureEditor editor(capture);
     prepareSelectEditor(editor, widget);
-    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-    QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+    QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
     QTest::mouseMove(&editor, QPoint(100, 90), 20);
     QApplication::processEvents();
     const QImage ui = editor.grab().toImage();
@@ -447,8 +444,7 @@ bool runMeasurementReadoutCheck(QString &error) {
   if (!expect(QStringLiteral("300, 240"), QStringLiteral("Idle pointer")))
     return false;
 
-  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
   QTest::mouseMove(&editor, QPoint(200, 150), 20);
   QApplication::processEvents();
   if (!expect(QStringLiteral("600 × 440"), QStringLiteral("Hovered window")))
@@ -5326,16 +5322,20 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
                              "selecting a scrolling region");
       return false;
     }
-    // Space walks Region -> Scroll -> Window -> Region.
+    // Space walks Region <-> Window and skips Scroll, which drops the still.
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
     if (!scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
       error = QStringLiteral("Space from scroll mode did not step to window");
       return false;
     }
     QTest::keyClick(&scrollEditor, Qt::Key_Space);
-    QTest::keyClick(&scrollEditor, Qt::Key_Space);
+    if (scrollEditor.windowModeForTest() || scrollEditor.scrollModeForTest()) {
+      error = QStringLiteral("Space from window mode did not return to region");
+      return false;
+    }
+    QTest::keyClick(&scrollEditor, Qt::Key_S);
     if (!scrollEditor.scrollModeForTest()) {
-      error = QStringLiteral("Space did not cycle back round to scroll mode");
+      error = QStringLiteral("S did not return to scroll mode");
       return false;
     }
     // A stitched result is handed to the same editor and annotates like any
@@ -5591,6 +5591,135 @@ bool runAreaLastRegionSmoke(QApplication &application, QString &error) {
     editor.close();
     application.processEvents();
   }
+  return true;
+}
+
+/** Scroll mode must drop a hotkey-frozen still so the page under the
+ *  overlay stays live. Production change that would fail this: S leaves
+ *  capture_.source painted as the select backdrop. */
+bool runScrollDropsFrozenFrameSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 320, 240};
+  capture.monitor.pixelSize = {320, 240};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(320, 240, QImage::Format_RGB32);
+  capture.source.fill(QColor(QStringLiteral("#28405c")));
+  capture.previewSize = capture.monitor.geometry.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(320, 240);
+  editor.show();
+  application.processEvents();
+  const QImage frozenOverlay = editor.grab().toImage();
+  const QColor frozenPixel =
+      frozenOverlay.isNull() ? QColor() : frozenOverlay.pixelColor(10, 120);
+  if (editor.captureData().source.isNull() || frozenOverlay.isNull() ||
+      frozenPixel.alpha() < 255) {
+    error = QStringLiteral(
+        "Hotkey frame did not paint as an opaque still before scroll mode");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_S);
+  application.processEvents();
+  const QImage liveOverlay = editor.grab().toImage();
+  const QColor livePixel =
+      liveOverlay.isNull() ? QColor() : liveOverlay.pixelColor(10, 120);
+  if (!editor.scrollModeForTest() || !editor.selectingForTest() ||
+      !editor.captureData().source.isNull() || liveOverlay.isNull() ||
+      livePixel.alpha() >= 255) {
+    error = QStringLiteral("Scroll mode did not drop the frozen frame for a "
+                           "live page: sourceNull=%1 alpha=%2")
+                .arg(editor.captureData().source.isNull())
+                .arg(livePixel.alpha());
+    return false;
+  }
+
+  CaptureEditor scrollEditor(capture, CaptureEditor::CaptureMode::Scroll);
+  scrollEditor.resize(320, 240);
+  scrollEditor.show();
+  application.processEvents();
+  const QImage startedLive = scrollEditor.grab().toImage();
+  const QColor startedPixel =
+      startedLive.isNull() ? QColor() : startedLive.pixelColor(10, 120);
+  if (!scrollEditor.scrollModeForTest() ||
+      !scrollEditor.captureData().source.isNull() || startedLive.isNull() ||
+      startedPixel.alpha() >= 255) {
+    error = QStringLiteral(
+        "--scroll opened on the frozen still instead of the live page");
+    return false;
+  }
+  scrollEditor.close();
+
+  QTemporaryDir captureDir;
+  if (!captureDir.isValid()) {
+    error = QStringLiteral("Could not create recapture directory");
+    editor.close();
+    return false;
+  }
+  QImage recapture(320, 240, QImage::Format_RGB32);
+  recapture.fill(QColor(QStringLiteral("#aa3040")));
+  const QString recapturePath =
+      QDir(captureDir.path()).filePath(QStringLiteral("recapture.png"));
+  if (!recapture.save(recapturePath, "PNG")) {
+    error = QStringLiteral("Could not write recapture source");
+    editor.close();
+    return false;
+  }
+  const QByteArray oldCapture = qgetenv("FOMOSNAP_TEST_CAPTURE");
+  qputenv("FOMOSNAP_TEST_CAPTURE", recapturePath.toUtf8());
+  const auto restoreCapture = qScopeGuard([&] {
+    if (oldCapture.isEmpty())
+      qunsetenv("FOMOSNAP_TEST_CAPTURE");
+    else
+      qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
+  });
+
+  QTest::keyClick(&editor, Qt::Key_S);
+  application.processEvents();
+  if (editor.scrollModeForTest() || !editor.captureData().source.isNull()) {
+    error = QStringLiteral(
+        "Leaving scroll mode did not keep the live desktop for a new still");
+    editor.close();
+    return false;
+  }
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(40, 40));
+  QTest::mouseMove(&editor, QPoint(200, 180), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 180));
+  QElapsedTimer timer;
+  timer.start();
+  while (editor.captureData().source.isNull() && timer.elapsed() < 5000) {
+    application.processEvents();
+    QThread::msleep(1);
+  }
+  if (editor.captureData().source.isNull() || editor.selectingForTest() ||
+      editor.renderCurrentOutput().pixelColor(0, 0) !=
+          recapture.pixelColor(40, 40)) {
+    error = QStringLiteral(
+        "A region after scroll did not grab a new still from the live page");
+    editor.close();
+    return false;
+  }
+  editor.close();
+
+  CaptureEditor frozen(capture);
+  frozen.resize(320, 240);
+  frozen.show();
+  application.processEvents();
+  const QImage original = frozen.captureData().source.copy();
+  QTest::mousePress(&frozen, Qt::LeftButton, Qt::NoModifier, QPoint(40, 40));
+  QTest::mouseMove(&frozen, QPoint(200, 180), 20);
+  QTest::mouseRelease(&frozen, Qt::LeftButton, Qt::NoModifier, QPoint(200, 180));
+  application.processEvents();
+  if (frozen.captureData().source != original || frozen.selectingForTest() ||
+      frozen.renderCurrentOutput().pixelColor(0, 0) != original.pixelColor(40, 40)) {
+    error = QStringLiteral(
+        "A region of the hotkey frame recaptured instead of cropping it");
+    frozen.close();
+    return false;
+  }
+  frozen.close();
   return true;
 }
 
@@ -5924,6 +6053,10 @@ int main(int argc, char **argv) {
   if (!runAsyncCaptureRegionSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 82;
+  }
+  if (!runScrollDropsFrozenFrameSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 129;
   }
   if (!runLiveSelectionCaptureSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
@@ -6276,8 +6409,7 @@ int main(int argc, char **argv) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Window
+  QTest::keyClick(&editor, Qt::Key_Space); // Region -> Window
   QTest::mouseMove(&editor, QPoint(200, 160), 20);
   application.processEvents();
   const QImage hoverUi = editor.grab().toImage();

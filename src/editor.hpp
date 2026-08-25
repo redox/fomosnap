@@ -367,9 +367,13 @@ private:
   void activateSelectTab(SelectTab tab);
   void setWindowMode(bool enabled);
   void setScrollMode(bool enabled);
+  /// Drops a hotkey-frozen still so the select overlay is a scrim over the
+  /// live desktop. Scroll capture needs that; region/window/fullscreen do not.
+  void releaseFrozenCapture();
   void selectFullscreen();
-  /// Back from the editor to the select phase: the op log is dropped and a
-  /// live screen is offered again for a new region or window.
+  /// Back from the editor to the select phase: the op log is dropped. A
+  /// hotkey-frozen still is kept so a second crop still has the hover; a
+  /// handed image or a live session recaptures.
   void returnToSelect(bool windowMode);
   /// Scroll capture takes over the surface with `region` drawn.
   void startScrollCapture(const QRect &region);

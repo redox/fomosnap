@@ -51,9 +51,9 @@ global hotkey were rewritten against macOS frameworks.
 - A recents shelf: the select overlay stacks small cards of the last five captures
   along the right edge; hover to fan them out, click one to reopen it in the editor
   with its layers still editable instead of taking a new screenshot.
-- A live selection surface: the desktop keeps updating under the dimmed overlay
-  while FOMOsnap retains keyboard and pointer input; the selected image freezes
-  only when the region, window, or display is committed.
+- Region, window, and fullscreen freeze the display under the pointer before
+  the overlay appears, so hover, menus, and tooltips stay in the shot after
+  you move the mouse. Scroll capture stays live so the page can still move.
 - Correct native-pixel export on fractional or integer-scaled monitors.
 
 ## Platform scope
@@ -415,7 +415,7 @@ without reaching for the pointer.
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Step through the capture-kind tabs (Region, Scrolling Region, Window) |
+| `Space` | Toggle Region and Window (Scrolling Region is `S` or the tab) |
 | `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `Cmd+Arrow` | Move among windows in window mode |

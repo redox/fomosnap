@@ -341,10 +341,16 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
       return 1;
     }
   } else if (!options.editingImage) {
-    // The selection surface starts with metadata only. Its translucent scrim
-    // shows the live desktop, and the pixels arrive after a choice is made.
-    capture.previewSize = capture.monitor.geometry.size();
-    capture.windows = mac::windowTargets(capture.monitor);
+    if (captureMode == CaptureEditor::CaptureMode::Scroll) {
+      // The page must stay live so the user can see what they are framing.
+      capture.previewSize = capture.monitor.geometry.size();
+      capture.windows = mac::windowTargets(capture.monitor);
+    } else if (!captureMonitorPixels(capture.monitor, capture, true, error)) {
+      qCritical().noquote() << error;
+      sendCaptureNotification(
+          QStringLiteral("Screenshot failed: %1").arg(error));
+      return 1;
+    }
   }
 
   if (instantFullscreenOutput) {
@@ -409,9 +415,6 @@ int CaptureSession::start(const SessionOptions &options, bool watchForClose,
   editor->show();
   macwindow::activate(window);
   editor->setFocus(Qt::ActiveWindowFocusReason);
-  if (!options.editingImage && !instantFullscreenOutput &&
-      captureMode == CaptureEditor::CaptureMode::Fullscreen)
-    editor->startCapture(CaptureEditor::CaptureMode::Fullscreen, false, true);
 
   if (watchForClose) {
     auto *watcher = new CloseWatcher(editor.get(), [this] { stop(); });
