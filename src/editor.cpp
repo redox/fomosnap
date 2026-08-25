@@ -740,8 +740,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   if (liveSelection_ && capture_.previewSize.isEmpty())
     capture_.previewSize = capture_.monitor.geometry.size();
   if (capture_.source.isNull()) {
-    // Interactive screen selection starts with only monitor metadata, so the
-    // desktop remains visible until the user commits a selection.
+    // No still yet: the scrim shows the live desktop. Scroll starts this way;
+    // region/window/fullscreen normally arrive with the hotkey frame already
+    // in source, so hover is baked in before the overlay exists.
     switch (mode) {
     case CaptureMode::Window:
       windowMode_ = true;
@@ -750,9 +751,6 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
           "area"));
       break;
     case CaptureMode::Scroll:
-      scrollMode_ = true;
-      setStatus(QStringLiteral(
-          "Drag to select a scrolling region · the page inside stays live"));
       break;
     case CaptureMode::Region:
       setStatus(
@@ -795,12 +793,10 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     windowMode_ = true;
     hoveredWindow_ = windowAt(cursor_);
     setStatus(QStringLiteral("Window mode · click or Super+Arrows then Enter · "
-                             "Space selects a scrolling region"));
-  } else if (mode == CaptureMode::Scroll) {
-    scrollMode_ = true;
-    setStatus(QStringLiteral(
-        "Drag to select a scrolling region · the page inside stays live"));
+                             "Space returns to area"));
   }
+  if (mode == CaptureMode::Scroll)
+    setScrollMode(true);
   adjustSettleTimer_.setSingleShot(true);
   adjustSettleTimer_.setInterval(kAdjustSettleMs);
   connect(&adjustSettleTimer_, &QTimer::timeout, this, [this] {
@@ -3317,9 +3313,8 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       return;
     }
     if (event->key() == Qt::Key_Space) {
-      // Space steps along the tab strip. Fullscreen is skipped: it captures
-      // on the spot, and a cycle key that fires it on the way past would be
-      // a trap rather than a mode.
+      // Space steps Region <-> Window. Fullscreen captures on the spot, and
+      // Scroll drops the hotkey still, so either on the way past is a trap.
       const QVector<CaptureTab> tabs = selectTabItems();
       int current = -1;
       for (int index = 0; index < tabs.size(); ++index) {
@@ -3330,7 +3325,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       }
       for (int step = 1; step <= tabs.size(); ++step) {
         const SelectTab next = tabs.at((current + step) % tabs.size()).kind;
-        if (next != SelectTab::Fullscreen) {
+        if (next != SelectTab::Fullscreen && next != SelectTab::Scroll) {
           activateSelectTab(next);
           break;
         }
@@ -4823,10 +4818,37 @@ bool CaptureEditor::hasLiveScreen() const {
   return captureMode_ != CaptureMode::File && !liveMonitor_.name.isEmpty();
 }
 
+void CaptureEditor::releaseFrozenCapture() {
+  if (capture_.source.isNull()) {
+    liveSelection_ = captureMode_ != CaptureMode::File;
+    return;
+  }
+  capture_.source = {};
+  pristineSource_ = {};
+  liveSelection_ = true;
+  captureStarted_ = false;
+  capturePending_ = false;
+  captureForSelection_ = false;
+  pendingEditStatus_.clear();
+  backdrop_ = {};
+  dimmedBackdrop_ = {};
+  backdropSize_ = {};
+  backdropRatio_ = 0.0;
+  backdropKey_ = 0;
+  if (!liveMonitor_.name.isEmpty()) {
+    capture_.monitor = liveMonitor_;
+    if (capture_.previewSize.isEmpty())
+      capture_.previewSize = liveMonitor_.geometry.size();
+    capture_.windows = mac::windowTargets(liveMonitor_);
+  }
+}
+
 void CaptureEditor::setScrollMode(bool enabled) {
   scrollMode_ = enabled;
-  if (enabled)
+  if (enabled) {
     windowMode_ = false;
+    releaseFrozenCapture();
+  }
   dragging_ = false;
   selection_ = {};
   hoveredWindow_ = -1;
@@ -4996,8 +5018,9 @@ void CaptureEditor::returnToSelect(bool windowMode) {
   opIndex_ = 0;
   replayLog();
   if (liveSelection_ || handedImage_) {
-    // Selection always returns to the live desktop. The next choice captures
-    // a fresh frame instead of reviving the image that was just edited.
+    // No hotkey still to keep: drop the edited pixels so the next choice
+    // captures a fresh frame. A frozen hotkey frame stays so a second crop
+    // still has the hover.
     handedImage_ = false;
     capture_ = CaptureData();
     capture_.monitor = liveMonitor_;
@@ -5370,9 +5393,8 @@ void CaptureEditor::paintSelect(QPainter &painter) {
 
   painter.setCompositionMode(QPainter::CompositionMode_Source);
   if (capture_.source.isNull()) {
-    // The selection phase is a translucent scrim over the live desktop. A
-    // committed choice is captured later, so no stale full-screen image is
-    // painted here.
+    // Scroll (or a session that has dropped its still) is a scrim over the
+    // live desktop. The committed region is captured then.
     painter.fillRect(rect(), QColor(0, 0, 0, kBackdropDim));
     if (haveHole)
       painter.fillRect(destHole, Qt::transparent);

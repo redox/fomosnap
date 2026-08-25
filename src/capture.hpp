@@ -126,8 +126,8 @@ enum class AnnotationLayer { Redaction, Default };
 [[nodiscard]] QFont annotationTextFont(qreal size);
 /**
  * Discovers the focused monitor (name, geometry, scale): the display under
- * the pointer. Safe to call on the main thread to position the live selection
- * overlay before its pixel capture is needed.
+ * the pointer. Safe to call on the main thread before the hotkey frame is
+ * grabbed.
  */
 [[nodiscard]] bool probeFocusedMonitor(MonitorInfo &monitor, QString &error);
 /**
