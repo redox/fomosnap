@@ -33,7 +33,6 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QProcess>
-#include <QProxyStyle>
 #include <QRandomGenerator>
 #include <QScreen>
 #include <QScrollBar>
@@ -52,11 +51,14 @@
 
 /// The inline text editor: a multiline editor whose native caret is hidden (the
 /// editor paints a shorter one over Neucha's tall line box) and whose caret
-/// rectangle is exposed for that.
+/// rectangle is exposed for that. The caret is hidden through cursorWidth
+/// because QPlainTextEdit never consults PM_TextCursorWidth, so a proxy style
+/// zeroing that metric leaves the widget's own caret showing under the
+/// painted one.
 class InlineTextEdit final : public QPlainTextEdit {
 public:
   explicit InlineTextEdit(QWidget *parent) : QPlainTextEdit(parent) {
-    setStyle(&caretlessStyle_);
+    setCursorWidth(0);
     setFrameShape(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -65,18 +67,6 @@ public:
   }
   using QPlainTextEdit::cursorRect;
   using QPlainTextEdit::setViewportMargins;
-
-private:
-  class CaretlessStyle final : public QProxyStyle {
-  public:
-    int pixelMetric(PixelMetric metric, const QStyleOption *option,
-                    const QWidget *widget) const override {
-      return metric == PM_TextCursorWidth
-                 ? 0
-                 : QProxyStyle::pixelMetric(metric, option, widget);
-    }
-  };
-  CaretlessStyle caretlessStyle_;
 };
 
 namespace {
@@ -777,6 +767,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                  {QStringLiteral("--pin"), result.path})) {
       QFile::remove(result.path);
+      QFile::remove(operationLogPath(result.path));
       --pinCount_;
       setStatus(QStringLiteral("Could not start pinned capture"));
       return;
@@ -1219,8 +1210,8 @@ QString CaptureEditor::toolStatus() const {
   const int size = qRound(annotationSize_);
   switch (tool_) {
   case Tool::Select:
-    return QStringLiteral("Select · drag moves layers · wheel zooms · outer "
-                          "handles crop");
+    return QStringLiteral("Select · drag moves layers · Ctrl+wheel zooms · "
+                          "outer handles crop");
   case Tool::Spotlight: {
     const QString shape =
         spotlightShape_ == SpotlightShape::Ellipse ? QStringLiteral("ellipse")
@@ -1470,6 +1461,17 @@ bool CaptureEditor::adjustSelectedAnnotationRing(int step) {
   if (selectedAnnotation_ < 0 || selectedAnnotation_ >= annotations_.size())
     return false;
   Annotation &annotation = annotations_[selectedAnnotation_];
+  if (annotation.kind == Annotation::Kind::Rectangle) {
+    // The selected rectangle's own corners, undoably; the armed tool's
+    // default radius stays what it was.
+    annotation.cornerRadius =
+        std::clamp(annotation.cornerRadius + step * kCornerRadiusStep, 0.0,
+                   kMaximumCornerRadius);
+    setStatus(QStringLiteral("Rectangle · %1 · Alt+wheel adjusts")
+                  .arg(cornerName(annotation.cornerRadius)));
+    commitPatch({selectedAnnotation_});
+    return true;
+  }
   if (annotation.kind != Annotation::Kind::Spotlight)
     return false;
   annotation.size = std::clamp(annotation.size + step * 2.0, 0.0, 12.0);
@@ -1978,6 +1980,8 @@ QString CaptureEditor::measurementText() const {
   if (capture_.previewSize.isEmpty())
     return {};
   if (phase_ == Phase::Select) {
+    if (recentsOpen_)
+      return {};
     if (windowMode_) {
       if (hoveredWindow_ < 0 || hoveredWindow_ >= capture_.windows.size())
         return {};
@@ -2062,7 +2066,7 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   };
 
   add(36, QStringLiteral("tool-select"), {},
-      QStringLiteral("Select/move · V · Wheel zoom · outer handles crop"));
+      QStringLiteral("Select/move · V · Ctrl+wheel zoom · outer handles crop"));
   add(36, QStringLiteral("tool-arrow"), {},
       QStringLiteral("Arrow · A · Shift snaps 45° · Size %1 · Wheel")
           .arg(qRound(annotationSize_)));
@@ -2333,9 +2337,21 @@ void CaptureEditor::replayLog() {
   for (int index = 0; index < opIndex_ && index < ops_.size(); ++index) {
     const Operation &op = ops_.at(index);
     switch (op.type) {
-    case Operation::Type::Crop:
+    case Operation::Type::Crop: {
+      // Annotations anchor to the image content, not to the crop frame: a
+      // recrop moves the frame's origin, so every layer shifts by the same
+      // delta to stay over the pixels it was drawn on. This matches what the
+      // live crop drag shows and restores the committed behaviour the
+      // pre-op-log undo model had in 1.13.0. The leading crop replays over
+      // an empty layer list, so it is unaffected.
+      const QPointF originDelta = selection.topLeft() - op.crop.topLeft();
+      if (!originDelta.isNull()) {
+        for (Annotation &annotation : annotations)
+          translateAnnotation(annotation, originDelta);
+      }
       selection = op.crop;
       break;
+    }
     case Operation::Type::Background:
       background = op.background;
       break;
@@ -2560,7 +2576,9 @@ void CaptureEditor::pinSnapshot() {
         PinResult result;
         const QImage image =
             renderCapture(captureCopy, selection, annotations, background);
-        if (image.isNull() || !saveTemporarySnapshot(image, path, result.error)) {
+        if (image.isNull() ||
+            !savePinnedSnapshot(image, path, selection.size().toSize(),
+                                result.error)) {
           if (result.error.isEmpty())
             result.error = QStringLiteral("Could not render pinned capture");
           return result;
@@ -2691,7 +2709,7 @@ void CaptureEditor::chooseWindow(int index) {
     return;
   }
   enterEdit(QStringLiteral(
-      "Window selected · Select moves layers · wheel zooms · outer handles "
+      "Window selected · Select moves layers · Ctrl+wheel zooms · outer handles "
       "crop"));
 }
 
@@ -3263,7 +3281,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
           if (!region.isEmpty()) {
             commitRegion(QRectF(region),
                          QStringLiteral("Last area restored · Select moves "
-                                        "layers · wheel zooms · outer handles "
+                                        "layers · Ctrl+wheel zooms · outer handles "
                                         "crop"));
             update();
           }
@@ -3878,7 +3896,8 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     return;
   }
   if (event->button() == Qt::MiddleButton) {
-    if (phase_ == Phase::Edit && viewZoom_ > 1.0) {
+    if (phase_ == Phase::Edit && viewZoom_ > 1.0 &&
+        !textEditor_->isVisible()) {
       panning_ = true;
       panAnchor_ = event->position();
       setCursor(Qt::ClosedHandCursor);
@@ -4444,6 +4463,13 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
     QWidget::wheelEvent(event);
     return;
   }
+  if (textEditor_->isVisible()) {
+    // The draft widget is laid out for the view it opened in; a zoom or pan
+    // under it would leave the text adrift mid-edit. The view holds still
+    // until the text commits.
+    event->accept();
+    return;
+  }
   // High-resolution touchpads can arrive with an empty angleDelta and only a
   // pixelDelta; treat the two interchangeably, preferring the exact pixels
   // for panning and the notch units for discrete steps.
@@ -4919,7 +4945,8 @@ void CaptureEditor::adoptStitched(const QImage &image) {
                        .arg(image.width())
                        .arg(image.height())
                  : QStringLiteral("Scroll capture stitched · Select moves "
-                                  "layers · wheel zooms · outer handles crop"));
+                                  "layers · Ctrl+wheel zooms · outer handles "
+                                  "crop"));
 }
 
 void CaptureEditor::adoptImage(QImage image, OperationLog log, SelectTab kind,
@@ -5776,7 +5803,10 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       const qreal baseline = cursor.top() + metrics.ascent();
       const qreal top = baseline - metrics.capHeight() * 1.15;
       const qreal bottom = baseline + metrics.descent() * 0.35;
-      painter.setPen(QPen(textColor_, std::max(1.0, box.height() / 18.0)));
+      // Scale the pen to one line, not the widget: the multiline editor grows
+      // taller with every Return, and the caret must not thicken with it.
+      const qreal lineBox = metrics.lineSpacing() + metrics.descent() + 4.0;
+      painter.setPen(QPen(textColor_, std::max(1.0, lineBox / 18.0)));
       painter.drawLine(QPointF(cursor.center().x(), top),
                        QPointF(cursor.center().x(), bottom));
     }

@@ -1161,6 +1161,115 @@ bool runSpotlightAndSampleChecks(QString &error) {
   return true;
 }
 
+/** The draft's native caret is hidden; QPlainTextEdit actually reads cursorWidth. */
+bool runNativeCaretHiddenCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(300, 200, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(Qt::white);
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toScreenPointForTest(QPointF(80, 80)).toPoint());
+  application.processEvents();
+  auto *draft = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+  if (!draft) {
+    error = QStringLiteral("Text draft did not open for the caret check");
+    return false;
+  }
+  if (draft->cursorWidth() != 0) {
+    error = QStringLiteral("Native caret width is %1, expected 0")
+                .arg(draft->cursorWidth());
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
+/** The view holds still while a text draft is open. */
+bool runDraftViewLockCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  {
+    QPainter painter(&capture.source);
+    for (int y = 0; y < 600; y += 20)
+      for (int x = 0; x < 800; x += 20)
+        painter.fillRect(QRect(x, y, 20, 20), ((x + y) / 20) % 2 == 0
+                                                  ? QColor(24, 32, 48)
+                                                  : QColor(96, 128, 176));
+  }
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+
+  const auto ctrlWheel = [&] {
+    QWheelEvent wheel(QPointF(400, 300), QPointF(400, 300), {}, {0, 120},
+                      Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
+                      false);
+    QApplication::sendEvent(&editor, &wheel);
+    application.processEvents();
+  };
+  const QRectF image = editor.editImageRectForTest();
+  const QRect sample(qRound(image.left() + 20), qRound(image.bottom() - 80),
+                     200, 40);
+  const auto grab = [&] { return editor.grab().toImage().copy(sample); };
+
+  ctrlWheel();
+  ctrlWheel();
+  ctrlWheel();
+  QTest::keyClick(&editor, Qt::Key_T);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toScreenPointForTest(QPointF(400, 200)).toPoint());
+  application.processEvents();
+  QWidget *draft = QApplication::focusWidget();
+  if (!draft) {
+    error = QStringLiteral("Text draft did not open for the view-lock check");
+    return false;
+  }
+  QTest::keyClicks(draft, QStringLiteral("hold"));
+  application.processEvents();
+
+  const QImage before = grab();
+  ctrlWheel();
+  if (grab() != before) {
+    error = QStringLiteral("Zooming during a text draft moved the view");
+    return false;
+  }
+  QTest::mousePress(&editor, Qt::MiddleButton, Qt::NoModifier, QPoint(400, 300));
+  QTest::mouseMove(&editor, QPoint(460, 350), 20);
+  QTest::mouseRelease(&editor, Qt::MiddleButton, Qt::NoModifier,
+                      QPoint(460, 350));
+  application.processEvents();
+  if (grab() != before) {
+    error = QStringLiteral("Panning during a text draft moved the view");
+    return false;
+  }
+
+  const QImage committed = grab();
+  ctrlWheel();
+  if (grab() == committed) {
+    error = QStringLiteral("The view stayed locked after the text committed");
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
 /** Checks that clicking away commits in-progress text instead of losing it. */
 bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
   CaptureData capture;
@@ -2519,10 +2628,18 @@ bool runRecentsShelfSmoke(QApplication &application, QString &error) {
     }
     QTest::mouseMove(&editor, QPoint(100, 300), 20);
     application.processEvents();
+    if (editor.measurementText().isEmpty()) {
+      error = QStringLiteral("Selection readout disappeared outside the shelf");
+      return false;
+    }
     QTest::mouseMove(&editor, stacked.center().toPoint(), 20);
     application.processEvents();
     if (!editor.recentsOpenForTest()) {
       error = QStringLiteral("Hovering the stack did not fan the shelf out");
+      return false;
+    }
+    if (!editor.measurementText().isEmpty()) {
+      error = QStringLiteral("Selection readout overlapped the open shelf");
       return false;
     }
     const QRectF fanned = editor.recentCardRectForTest(0);
@@ -2720,6 +2837,120 @@ bool runOpLogCapKeepsLeadingCrop(QApplication &application, QString &error) {
     return false;
   }
   editor.close();
+  return true;
+}
+
+/** A recrop moves the frame, never the ink: annotations stay over the
+ *  pixels they were drawn on when the top/left crop handles move the
+ *  selection origin. */
+bool runCropKeepsAnnotationsAnchored(QApplication &application,
+                                     QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 400, 300};
+  capture.monitor.pixelSize = {400, 300};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(400, 300, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#112233")));
+  capture.previewSize = capture.source.size();
+
+  const auto lineAt = [](const QImage &image, int x, int y) {
+    const QColor pixel = image.pixelColor(x, y);
+    return pixel.red() > 200 && pixel.green() < 100;
+  };
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+  editor.setSuppressSnapshots(true);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_L);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toScreenPointForTest(QPointF(100, 100)).toPoint());
+  QTest::mouseMove(&editor, editor.toScreenPointForTest(QPointF(300, 100)).toPoint(),
+                   20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      editor.toScreenPointForTest(QPointF(300, 100)).toPoint());
+  application.processEvents();
+  if (!lineAt(editor.renderCurrentOutput(), 150, 100)) {
+    error = QStringLiteral("Anchoring check could not draw its line");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_V);
+  application.processEvents();
+  const QRectF image = editor.editImageRectForTest();
+  const QPoint handle = (image.topLeft() + QPointF(-7, -7)).toPoint();
+  const QPoint inward = editor.toScreenPointForTest(QPointF(43, 43)).toPoint();
+  QTest::mouseMove(&editor, handle, 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handle);
+  QTest::mouseMove(&editor, inward, 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, inward);
+  application.processEvents();
+  if (editor.currentSelection() != QRectF(43, 43, 357, 257)) {
+    error = QStringLiteral("Top-left crop drag did not land on (43,43): %1,%2 %3x%4")
+                .arg(editor.currentSelection().x())
+                .arg(editor.currentSelection().y())
+                .arg(editor.currentSelection().width())
+                .arg(editor.currentSelection().height());
+    return false;
+  }
+  QImage cropped = editor.renderCurrentOutput();
+  if (!lineAt(cropped, 150, 57) || !lineAt(cropped, 70, 57) ||
+      lineAt(cropped, 280, 57) || lineAt(cropped, 150, 100)) {
+    error = QStringLiteral(
+        "Crop from the top-left moved the line off its content");
+    return false;
+  }
+
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  const QImage uncropped = editor.renderCurrentOutput();
+  if (!lineAt(uncropped, 150, 100) || !lineAt(uncropped, 280, 100) ||
+      lineAt(uncropped, 70, 57)) {
+    error = QStringLiteral("Undoing the crop did not restore the line");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+  application.processEvents();
+  cropped = editor.renderCurrentOutput();
+  if (!lineAt(cropped, 150, 57) || !lineAt(cropped, 70, 57) ||
+      lineAt(cropped, 280, 57) || lineAt(cropped, 150, 100)) {
+    error = QStringLiteral("Redoing the crop lost the content anchoring");
+    return false;
+  }
+
+  QTemporaryDir directory;
+  if (!directory.isValid()) {
+    error = QStringLiteral("Could not create crop-anchor directory");
+    return false;
+  }
+  const QString logPath =
+      QDir(directory.path()).filePath(QStringLiteral("anchored.json"));
+  OperationLog persisted;
+  persisted.ops = editor.operationLog();
+  persisted.index = editor.operationIndex();
+  if (!saveOperationLog(logPath, persisted, error))
+    return false;
+  OperationLog reloaded;
+  if (!loadOperationLog(logPath, reloaded, error))
+    return false;
+  editor.close();
+
+  CaptureEditor replayed(capture, CaptureEditor::CaptureMode::File,
+                         QuickOutputMode::None, reloaded);
+  replayed.setSuppressSnapshots(true);
+  replayed.resize(800, 600);
+  replayed.show();
+  application.processEvents();
+  const QImage restored = replayed.renderCurrentOutput();
+  if (replayed.currentSelection() != QRectF(43, 43, 357, 257) ||
+      !lineAt(restored, 150, 57) || !lineAt(restored, 70, 57) ||
+      lineAt(restored, 280, 57) || lineAt(restored, 150, 100)) {
+    error = QStringLiteral("Reloaded op log lost the crop anchoring");
+    return false;
+  }
+  replayed.close();
   return true;
 }
 
@@ -3565,6 +3796,26 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
       shape(Annotation::Kind::Rectangle, {350, 245}, {550, 345}, true, 0);
   if (!snapshotMatches(expected({hollow, filled, rounded, squareAgain}))) {
     error = QStringLiteral("Alt+wheel did not clamp the corner radius to 0");
+    return false;
+  }
+
+  // Alt+wheel on a selected rectangle rounds that rectangle, undoably,
+  // instead of retuning the armed tool's default.
+  QTest::keyClick(&editor, Qt::Key_V);
+  application.processEvents();
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toScreenPointForTest(QPointF(450, 145)).toPoint());
+  wheel(1, Qt::AltModifier);
+  Annotation roundedMore = rounded;
+  roundedMore.cornerRadius = 14;
+  if (!snapshotMatches(expected({hollow, filled, roundedMore, squareAgain}))) {
+    error = QStringLiteral("Alt+wheel did not round the selected rectangle");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+  if (!snapshotMatches(expected({hollow, filled, rounded, squareAgain}))) {
+    error = QStringLiteral("Rounding the selected rectangle was not undoable");
     return false;
   }
 
@@ -6170,6 +6421,14 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 79;
   }
+  if (!runNativeCaretHiddenCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 121;
+  }
+  if (!runDraftViewLockCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 11;
+  }
   if (!runTextClickAwayCommitCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 87;
@@ -6354,6 +6613,10 @@ int main(int argc, char **argv) {
   if (!runOpLogCapKeepsLeadingCrop(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 84;
+  }
+  if (!runCropKeepsAnnotationsAnchored(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 125;
   }
   const QString outputRoot =
       argc > 1 ? QString::fromLocal8Bit(argv[1])
