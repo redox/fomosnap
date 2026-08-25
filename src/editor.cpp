@@ -3750,14 +3750,17 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
         cutBandHi_ = hi;
         // Annotation space is selection-relative logical px; map to
         // absolute logical, then to native source px via the cached ratio.
+        // Floor the start and ceil the end so every pixel the drag covers
+        // is in the half-open band — round() drops a trailing sliver when
+        // the display scale is not 1 and the pointer sits on a pixel edge.
         liveCut_.sourceStart = static_cast<int>(
-            std::round((cutDragOriginOffset_ + lo) * cutDragRatio_));
+            std::floor((cutDragOriginOffset_ + lo) * cutDragRatio_));
         liveCut_.sourceEnd = static_cast<int>(
-            std::round((cutDragOriginOffset_ + hi) * cutDragRatio_));
+            std::ceil((cutDragOriginOffset_ + hi) * cutDragRatio_));
         liveCut_.logicalStart =
-            static_cast<int>(std::round(cutDragOriginOffset_ + lo));
+            static_cast<int>(std::floor(cutDragOriginOffset_ + lo));
         liveCut_.logicalEnd =
-            static_cast<int>(std::round(cutDragOriginOffset_ + hi));
+            static_cast<int>(std::ceil(cutDragOriginOffset_ + hi));
       }
     }
     if ((tool_ == Tool::Freehand || tool_ == Tool::Highlighter) && dragging_ &&

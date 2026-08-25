@@ -4,6 +4,7 @@
 #include "output-config.hpp"
 #include "cli-path.hpp"
 #include "clipboard-smoke.hpp"
+#include "cut-mapping-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
 #include "recent-snaps.hpp"
@@ -6358,6 +6359,10 @@ int main(int argc, char **argv) {
       argc > 1 ? QString::fromLocal8Bit(argv[1])
                : QDir(QDir::tempPath())
                      .filePath(QStringLiteral("fomosnap-native-smoke"));
+  if (!runCutMappingSmoke(application, outputRoot, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 96;
+  }
   const QString snapshotPath = temporarySnapshotPath();
   QFile::remove(snapshotPath);
   const QString savedRoot = QDir(outputRoot).filePath(QStringLiteral("saved"));

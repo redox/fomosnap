@@ -242,6 +242,9 @@ public:
   /// Currently armed tool. Test accessor: cursor shape is a poor proxy, since
   /// what is under the pointer changes it.
   [[nodiscard]] Tool armedToolForTest() const { return tool_; }
+  /// Apply a cut as if the user had dragged that band. Test hook: operate on
+  /// a fixture raster without going through widget coordinates.
+  void applyCutForTest(CutOp cut) { commitCut(std::move(cut)); }
   /// Number of selected layers. Test accessor.
   [[nodiscard]] int selectedCountForTest() const {
     return static_cast<int>(selectedAnnotations_.size());
@@ -290,6 +293,15 @@ public:
   /// exact click/expectation points from real geometry instead of hand math.
   [[nodiscard]] QRectF editImageRectForTest() const { return editImageRect(); }
   [[nodiscard]] qreal editScaleForTest() const { return editScale(); }
+  [[nodiscard]] QPointF toAnnotationPointForTest(const QPointF &widget) const {
+    return toAnnotationPoint(widget);
+  }
+  /// Inverse of toAnnotationPoint: annotation-space → widget pixels.
+  [[nodiscard]] QPointF toScreenPointForTest(const QPointF &annotation) const {
+    const qreal scale = editScale();
+    return editImageRect().topLeft() +
+           annotation * (scale > 0.001 ? scale : 0.001);
+  }
   /// Center of the toolbar button whose action is `action` (e.g.
   /// "tool-arrow"), or (-1,-1) if not found. Test accessor: a click position
   /// that survives the toolbar's own layout changing.
