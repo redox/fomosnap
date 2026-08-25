@@ -94,6 +94,8 @@ public:
   /// exclusive again) and hides. Safe to call from inside one of this
   /// panel's own signals; the destructor calls it too.
   void release();
+  /// Same inset the editor uses so the tab strip sits below a notch.
+  void setSafeAreaTop(qreal inset) { safeAreaTop_ = inset; }
 
 signals:
   /// The capture is done: `image` is the stitched result.
@@ -211,6 +213,10 @@ private:
   /// in the session, so it can be picked up again.
   bool autoStalled_ = false;
   void reserveChromeStrip();
+  [[nodiscard]] QRect chromeBounds() const {
+    return rect().adjusted(0, qRound(safeAreaTop_), 0, 0);
+  }
+  qreal safeAreaTop_ = 0.0;
   bool released_ = false;
   /// The top-level window's handle, for the input mask.
   [[nodiscard]] QWindow *surfaceWindow() const;

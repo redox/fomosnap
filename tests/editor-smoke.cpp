@@ -1197,11 +1197,19 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(650, 470));
   application.processEvents();
+  // Screen points computed from the real image geometry, not hand-picked
+  // literals: robust to the toolbar/tab strip's own layout, which this click
+  // has to land through regardless of how tall it currently is.
+  const QPointF imageOrigin = editor.editImageRectForTest().topLeft();
+  const qreal editScale = editor.editScaleForTest();
+  const auto toScreen = [&](const QPointF &annotationPoint) {
+    return (imageOrigin + annotationPoint * editScale).toPoint();
+  };
 
   QTest::keyClick(&editor, Qt::Key_T);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 220));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({175, 100}));
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 400));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({125, 280}));
   application.processEvents();
   if (!snapshotMatches(
           renderCapture(capture, selection, {}, BackgroundStyle::None))) {
@@ -1231,7 +1239,7 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
     return false;
   }
   QTest::keyClicks(inlineEditor, QStringLiteral("away"));
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(450, 300));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({325, 180}));
   application.processEvents();
   if (!snapshotMatches(
           renderCapture(capture, selection, {clicked}, BackgroundStyle::None))) {
@@ -1243,8 +1251,9 @@ bool runTextClickAwayCommitCheck(QApplication &application, QString &error) {
       textAnnotation({325, 180}, QStringLiteral("Toolbar"));
   // The arrow button sits in the spaced toolbar above the capture.
   QTest::keyClicks(QApplication::focusWidget(), toolbar.text);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(60, 43));
-  QTest::mouseMove(&editor, QPoint(400, 300), 10);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")));
+  QTest::mouseMove(&editor, toScreen({275, 120}), 10);
   application.processEvents();
   if (!snapshotMatches(renderCapture(capture, selection, {clicked, toolbar},
                                      BackgroundStyle::None)) ||
@@ -1504,32 +1513,41 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
   }
   editorCapture.previewSize = editorCapture.source.size();
 
-  // Fullscreen draws the 800x600 capture at 84,68 scaled by 0.79. The secret
-  // then covers 242,226 to 321,273, centered on 281,250. A loupe smaller than
-  // the redaction can only show redacted pixels if it samples the redaction
-  // layer.
+  // Fullscreen draws the 800x600 capture scaled to fit under the toolbar; the
+  // secret sits at annotation (200,200)-(300,260), centered on (250,230). A
+  // loupe smaller than the redaction can only show redacted pixels if it
+  // samples the redaction layer. Screen points are computed from the live
+  // image geometry (toScreen), not hand-picked, since the toolbar/tab chrome
+  // above the image changes that geometry.
   const auto spotlightPreviewColor = [&](bool redact) {
     CaptureEditor editor(editorCapture, CaptureEditor::CaptureMode::Fullscreen);
     editor.resize(800, 600);
     editor.show();
     application.processEvents();
+    const QPointF origin = editor.editImageRectForTest().topLeft();
+    const qreal scale = editor.editScaleForTest();
+    const auto toScreen = [&](const QPointF &point) {
+      return (origin + point * scale).toPoint();
+    };
     if (redact) {
       QTest::keyClick(&editor, Qt::Key_D);
       QTest::keyClick(&editor, Qt::Key_D);
       QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(230, 214));
-      QTest::mouseMove(&editor, QPoint(333, 285), 20);
+                        toScreen({180, 180}));
+      QTest::mouseMove(&editor, toScreen({320, 280}), 20);
       QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                          QPoint(333, 285));
+                          toScreen({320, 280}));
       application.processEvents();
     }
     QTest::keyClick(&editor, Qt::Key_S);
-    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(251, 230));
-    QTest::mouseMove(&editor, QPoint(311, 270), 20);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                      toScreen({210, 205}));
+    QTest::mouseMove(&editor, toScreen({290, 255}), 20);
     QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(311, 270));
+                        toScreen({290, 255}));
     application.processEvents();
-    const QColor color = editor.grab().toImage().pixelColor(QPoint(281, 250));
+    const QColor color =
+        editor.grab().toImage().pixelColor(toScreen({250, 230}));
     editor.close();
     return color;
   };
@@ -1547,18 +1565,26 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
     editor.resize(800, 600);
     editor.show();
     application.processEvents();
+    const QPointF origin = editor.editImageRectForTest().topLeft();
+    const qreal scale = editor.editScaleForTest();
+    const auto toScreen = [&](const QPointF &point) {
+      return (origin + point * scale).toPoint();
+    };
     QTest::keyClick(&editor, Qt::Key_D);
     QTest::keyClick(&editor, Qt::Key_D);
-    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 214));
-    QTest::mouseMove(&editor, QPoint(333, 285), 20);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                      toScreen({180, 180}));
+    QTest::mouseMove(&editor, toScreen({320, 280}), 20);
     QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(333, 285));
+                        toScreen({320, 280}));
     QTest::keyClick(&editor, Qt::Key_5);
     QTest::keyClick(&editor, Qt::Key_A);
-    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 250));
-    QTest::mouseMove(&editor, QPoint(312, 250), 20);
+    // A horizontal arrow across the secret's vertical center (230).
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                      toScreen({210, 230}));
+    QTest::mouseMove(&editor, toScreen({289, 230}), 20);
     QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(312, 250));
+                        toScreen({289, 230}));
     // Park the pointer well below the key guide before sampling: the card
     // sizes itself to its text now, and a pointer left at the arrow's end
     // flips it left, over the pixels this check reads.
@@ -1568,9 +1594,11 @@ bool runAnnotationLayerChecks(QApplication &application, QString &error) {
     const QImage exported = editor.renderCurrentOutput();
     editor.close();
     const QColor arrowColor(QStringLiteral("#0a84ff"));
-    if (preview.pixelColor(250, 226) != solid ||
-        showsSecretRed(preview.pixelColor(250, 226)) ||
-        preview.pixelColor(260, 250) != arrowColor) {
+    const QPoint cornerScreen = toScreen({210, 202});
+    const QPoint onArrowScreen = toScreen({220, 230});
+    if (preview.pixelColor(cornerScreen) != solid ||
+        showsSecretRed(preview.pixelColor(cornerScreen)) ||
+        preview.pixelColor(onArrowScreen) != arrowColor) {
       error = QStringLiteral("Preview did not keep redaction under the arrow");
       return false;
     }
@@ -2239,16 +2267,25 @@ bool runOpLogSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
+  // Screen points computed from the live image geometry, not hand-picked:
+  // Fullscreen scales the 800x600 capture to fit under the toolbar/tab
+  // chrome, and that scale depends on their current height.
+  const QPointF origin = editor.editImageRectForTest().topLeft();
+  const qreal scale = editor.editScaleForTest();
+  const auto toScreen = [&](const QPointF &point) {
+    return (origin + point * scale).toPoint();
+  };
   QTest::keyClick(&editor, Qt::Key_D);
   QTest::keyClick(&editor, Qt::Key_D);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(230, 214));
-  QTest::mouseMove(&editor, QPoint(333, 285), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(333, 285));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({180, 180}));
+  QTest::mouseMove(&editor, toScreen({320, 280}), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({320, 280}));
   QTest::keyClick(&editor, Qt::Key_5);
   QTest::keyClick(&editor, Qt::Key_A);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 250));
-  QTest::mouseMove(&editor, QPoint(312, 250), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(312, 250));
+  // A horizontal arrow across the secret's vertical center (230).
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({210, 230}));
+  QTest::mouseMove(&editor, toScreen({289, 230}), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, toScreen({289, 230}));
   application.processEvents();
   if (!editor.waitForSnapshot()) {
     error = QStringLiteral("Op-log working document did not persist");
@@ -2686,14 +2723,71 @@ bool runOpLogCapKeepsLeadingCrop(QApplication &application, QString &error) {
 }
 
 } // namespace
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
-/** Runs the interaction and rendering smoke checks. */
+
+/** The tab strip, toolbar, and help card keep the pre-sync macOS placement:
+ *  the help card is an opaque top corner, the toolbar follows the capture,
+ *  and the tab container stays out of the display safe area. */
+bool runOverlayChromeLayoutCheck(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#6480a0")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+
+  const QImage selectUi = editor.grab().toImage();
+  const QColor legend = selectUi.pixelColor(760, 40);
+  if (legend.alpha() < 200 || legend.lightness() > 40) {
+    error = QStringLiteral(
+        "Select-phase help card was not an opaque top-right panel");
+    return false;
+  }
+  const QColor bottomLeft = selectUi.pixelColor(24, 560);
+  if (bottomLeft.alpha() > 180) {
+    error = QStringLiteral(
+        "Select-phase help card painted as a bottom-left slab");
+    return false;
+  }
+
+  editor.setSafeAreaTop(40);
+  editor.update();
+  application.processEvents();
+  const QImage notched = editor.grab().toImage();
+  const QColor underNotch = notched.pixelColor(400, 12);
+  if (underNotch.red() > 8 || underNotch.green() > 8 || underNotch.blue() > 8) {
+    error = QStringLiteral(
+        "Tab strip container painted into the display safe area");
+    return false;
+  }
+
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 200));
+  QTest::mouseMove(&editor, QPoint(550, 400), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(550, 400));
+  application.processEvents();
+  const QRectF image = editor.editImageRectForTest();
+  const QPoint toolbar =
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow"));
+  if (toolbar.x() < 0) {
+    error = QStringLiteral("Toolbar arrow button was missing");
+    return false;
+  }
+  const qreal gap = image.top() - toolbar.y();
+  if (gap < 30.0 || gap > 90.0) {
+    error = QStringLiteral("Toolbar did not sit just above the capture (gap %1)")
+                .arg(gap);
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
 /** Checks that a modifier left over from the launch binding is not believed.
  *  A binding with a modifier in it, such as the README's ALT + SHIFT + 4,
  *  leaves that modifier held as the overlay takes keyboard focus. Its release
@@ -2722,16 +2816,20 @@ bool runStuckModifierSmoke(QApplication &application, QString &error) {
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(60, 43));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")));
   application.processEvents();
 
   // A shallow drag, with the stale Shift the compositor still reports. It must
   // draw where it was dragged: snapped to 45°, this arrow would come out flat.
+  // Widget points come from the live image rect so a toolbar that follows the
+  // capture does not invent a new shaft.
+  const QPoint start = editor.toScreenPointForTest(QPointF(100, 295)).toPoint();
+  const QPoint end = editor.toScreenPointForTest(QPointF(300, 265)).toPoint();
   const QImage before = flushedSnapshot(editor, snapshotPath);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier, QPoint(200, 400));
-  QTest::mouseMove(&editor, QPoint(400, 370), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                      QPoint(400, 370));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier, start);
+  QTest::mouseMove(&editor, end, 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier, end);
   application.processEvents();
   const QImage drawn = flushedSnapshot(editor, snapshotPath);
   if (drawn == before) {
@@ -2759,10 +2857,9 @@ bool runStuckModifierSmoke(QApplication &application, QString &error) {
   // Shift means Shift: the same drag now snaps flat.
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier, QPoint(200, 400));
-  QTest::mouseMove(&editor, QPoint(400, 370), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                      QPoint(400, 370));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier, start);
+  QTest::mouseMove(&editor, end, 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier, end);
   application.processEvents();
   const QImage snapped = flushedSnapshot(editor, snapshotPath);
   const auto snappedInk = [&snapped](int x, int y) {
@@ -2897,9 +2994,9 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   };
 
   // A rectangle at annotation (400,195)-(550,345); the widget offset is
-  // (100,105). Drag it 100 px right so its right side leaves the canvas.
+  // (100,117). Drag it 100 px right so its right side leaves the canvas.
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(500, 300), QPoint(650, 450));
+  drag(QPoint(500, 312), QPoint(650, 462));
   Annotation rectangle;
   rectangle.kind = Annotation::Kind::Rectangle;
   rectangle.start = {400, 195};
@@ -2913,7 +3010,7 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   QTest::keyClick(&editor, Qt::Key_V);
   // Press the top edge, clear of the corner and mid-side handles (eight on
   // a box), so this is a move.
-  drag(QPoint(540, 300), QPoint(640, 300));
+  drag(QPoint(540, 312), QPoint(640, 312));
   Annotation shifted = rectangle;
   shifted.start.rx() += 100;
   shifted.end.rx() += 100;
@@ -2922,9 +3019,9 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Its bottom-right handle now sits outside the canvas (widget (750,450));
+  // Its bottom-right handle now sits outside the canvas (widget (750,462));
   // dragging it back in resizes the layer.
-  drag(QPoint(750, 450), QPoint(650, 400));
+  drag(QPoint(750, 462), QPoint(650, 412));
   Annotation resized = shifted;
   resized.end = {550, 295};
   if (!snapshotMatches(expected({resized}))) {
@@ -2941,7 +3038,7 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
 
   // Its right edge is outside the canvas too (widget x 750); grab off the
   // mid-side handle so this is a move, not a one-axis resize.
-  drag(QPoint(750, 340), QPoint(650, 340));
+  drag(QPoint(750, 352), QPoint(650, 352));
   if (!snapshotMatches(expected({rectangle}))) {
     error = QStringLiteral(
         "Grabbing a selected layer outside the canvas did not move it");
@@ -2951,7 +3048,7 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   // Outside the canvas, anything but the selected layer stays inert: a
   // click on the surround neither deselects nor changes anything, so
   // Delete still removes the layer.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(760, 150));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(760, 162));
   application.processEvents();
   if (!snapshotMatches(expected({rectangle}))) {
     error = QStringLiteral("A click outside the canvas changed the capture");
@@ -3064,28 +3161,30 @@ bool runSubmenuSelectionTriangleSmoke(QApplication &application, QString &error)
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
   application.processEvents();
 
-  QTest::mouseMove(&editor, QPoint(435, 43), 10);
+  const QPoint palette =
+      editor.toolbarButtonCenterForTest(QStringLiteral("palette"));
+  QTest::mouseMove(&editor, palette, 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Hovering the palette button did not open its submenu");
     return false;
   }
 
-  QTest::mouseMove(&editor, QPoint(417, 53), 10);
+  QTest::mouseMove(&editor, palette + QPoint(-18, 10), 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Diagonal movement inside the submenu triangle closed the palette");
     return false;
   }
 
-  QTest::mouseMove(&editor, QPoint(350, 78), 10);
+  QTest::mouseMove(&editor, palette + QPoint(-85, 35), 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Moving from the submenu triangle into the palette closed it");
     return false;
   }
 
-  QTest::mouseMove(&editor, QPoint(180, 43), 10);
+  QTest::mouseMove(&editor, QPoint(180, palette.y()), 10);
   application.processEvents();
   if (editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Movement away from the submenu triangle kept the palette open");
@@ -3156,7 +3255,7 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
   editor.show();
   application.processEvents();
 
-  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  // 600x400 selection shown 1:1 at widget offset (100, 117).
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
@@ -3187,10 +3286,10 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("E did not select the ellipse tool");
     return false;
   }
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 200));
-  QTest::mouseMove(&editor, QPoint(400, 300), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 212));
+  QTest::mouseMove(&editor, QPoint(400, 312), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(400, 300));
+                      QPoint(400, 312));
   application.processEvents();
   const Annotation ellipse = ellipseAnnotation({100, 95}, {300, 195});
   if (!snapshotMatches(expected({ellipse}))) {
@@ -3204,10 +3303,10 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
 
   // Shift keeps the bounding box 1:1 (a circle), extending the short axis.
   QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                    QPoint(500, 200));
-  QTest::mouseMove(&editor, QPoint(560, 300), 20);
+                    QPoint(500, 212));
+  QTest::mouseMove(&editor, QPoint(560, 312), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                      QPoint(560, 300));
+                      QPoint(560, 312));
   application.processEvents();
   const Annotation circle = ellipseAnnotation({400, 95}, {500, 195});
   if (!snapshotMatches(expected({ellipse, circle}))) {
@@ -3219,7 +3318,7 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
   // stroke hits (Delete only removes a selected layer).
   QTest::keyClick(&editor, Qt::Key_V);
   application.processEvents();
-  for (const QPoint &miss : {QPoint(203, 203), QPoint(300, 250)}) {
+  for (const QPoint &miss : {QPoint(203, 215), QPoint(300, 262)}) {
     QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, miss);
     QTest::keyClick(&editor, Qt::Key_Delete);
     application.processEvents();
@@ -3228,7 +3327,7 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
       return false;
     }
   }
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 212));
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(expected({circle}))) {
@@ -3244,10 +3343,10 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
 
   // Selected ellipse moves with its whole (hollow) body like other layers.
   // Off the mid-side handle (300,200) so this is a move, not a resize.
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 200));
-  QTest::mouseMove(&editor, QPoint(270, 230), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 212));
+  QTest::mouseMove(&editor, QPoint(270, 242), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(270, 230));
+                      QPoint(270, 242));
   application.processEvents();
   if (!snapshotMatches(
           expected({ellipseAnnotation({120, 125}, {320, 225}), circle}))) {
@@ -3263,20 +3362,19 @@ bool runEllipseToolSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Escape did not return to Select");
     return false;
   }
-  constexpr qreal toolbarWidth = 840.0;
-  const qreal scale = std::min<qreal>(1.0, (800.0 - 16.0) / toolbarWidth);
-  const qreal toolbarX = (800.0 - toolbarWidth * scale) / 2.0;
-  const QPointF button(toolbarX + (6 * 40 + 18) * scale,
-                       105 - 36 * scale - 46 + 18 * scale);
-  QTest::mouseMove(&editor, button.toPoint(), 10);
+  QTest::mouseMove(&editor,
+                   editor.toolbarButtonCenterForTest(
+                       QStringLiteral("tool-rectangle")),
+                   10);
   application.processEvents();
   if (!editor.shapeMenuOpenForTest()) {
     error = QStringLiteral("Hovering the shape button did not open its submenu");
     return false;
   }
-  const QPoint ellipseButton(qRound(button.x() - 2), qRound(button.y() + 36));
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ellipseButton);
-  QTest::mouseMove(&editor, QPoint(300, 300), 20);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toolbarButtonCenterForTest(
+                        QStringLiteral("shape-ellipse")));
+  QTest::mouseMove(&editor, QPoint(300, 312), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::CrossCursor) {
     error = QStringLiteral("Ellipse submenu button did not arm the tool");
@@ -3433,7 +3531,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   // other tool; R again toggles fill for the next shapes.
   QTest::keyClick(&editor, Qt::Key_R);
   wheel(1);
-  drag(QPoint(200, 200), QPoint(400, 300));
+  drag(QPoint(200, 212), QPoint(400, 312));
   const Annotation hollow = shapeSized(Annotation::Kind::Rectangle, {100, 95},
                                        {300, 195}, false, 0, 5);
   if (!snapshotMatches(expected({hollow}))) {
@@ -3442,7 +3540,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   }
   wheel(-1);
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(200, 350), QPoint(400, 450));
+  drag(QPoint(200, 362), QPoint(400, 462));
   const Annotation filled =
       shape(Annotation::Kind::Rectangle, {100, 245}, {300, 345}, true);
   if (!snapshotMatches(expected({hollow, filled}))) {
@@ -3453,7 +3551,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   // Alt+wheel rounds the corners of new rectangles (2 px per notch, 0–24);
   // the plain wheel keeps meaning stroke size, as for every other tool.
   wheel(6, Qt::AltModifier);
-  drag(QPoint(450, 200), QPoint(650, 300));
+  drag(QPoint(450, 212), QPoint(650, 312));
   const Annotation rounded =
       shape(Annotation::Kind::Rectangle, {350, 95}, {550, 195}, true, 12);
   if (!snapshotMatches(expected({hollow, filled, rounded}))) {
@@ -3461,7 +3559,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
     return false;
   }
   wheel(-20, Qt::AltModifier);
-  drag(QPoint(450, 350), QPoint(650, 450));
+  drag(QPoint(450, 362), QPoint(650, 462));
   const Annotation squareAgain =
       shape(Annotation::Kind::Rectangle, {350, 245}, {550, 345}, true, 0);
   if (!snapshotMatches(expected({hollow, filled, rounded, squareAgain}))) {
@@ -3472,7 +3570,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   // Ellipses share the fill flag; E again toggles it back to hollow.
   QTest::keyClick(&editor, Qt::Key_E);
   QTest::keyClick(&editor, Qt::Key_E);
-  drag(QPoint(200, 480), QPoint(300, 500));
+  drag(QPoint(200, 492), QPoint(300, 512));
   const Annotation ellipse =
       shape(Annotation::Kind::Ellipse, {100, 375}, {200, 395}, false);
   if (!snapshotMatches(
@@ -3484,7 +3582,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   // Filled shapes hit anywhere inside; hollow ones still only on the band.
   QTest::keyClick(&editor, Qt::Key_V);
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 250));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 262));
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(
@@ -3492,7 +3590,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Hollow rectangle interior selected a layer");
     return false;
   }
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 400));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 412));
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(expected({hollow, rounded, squareAgain, ellipse}))) {
@@ -3501,7 +3599,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   }
 
   // R with a selected rectangle toggles that layer's fill (undoable).
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 212));
   QTest::keyClick(&editor, Qt::Key_R);
   application.processEvents();
   Annotation hollowNowFilled = hollow;
@@ -3513,7 +3611,7 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
   }
   // Off any handle: with eight box handles the press point may be a resize
   // cursor even though the tool is still Select.
-  QTest::mouseMove(&editor, QPoint(160, 480));
+  QTest::mouseMove(&editor, QPoint(160, 492));
   application.processEvents();
   if (editor.cursor().shape() != Qt::ArrowCursor) {
     error = QStringLiteral("Toggling a selected rectangle switched tools");
@@ -3528,17 +3626,14 @@ bool runShapeFillToolSmoke(QApplication &application, QString &error) {
 
   // Clicking the armed rectangle's toolbar button toggles fill as well
   // (deselect first: R with a rectangle selected targets that layer).
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 480));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 492));
   QTest::keyClick(&editor, Qt::Key_R);
   application.processEvents();
-  constexpr qreal toolbarWidth = 840.0; // kToolbarWidth in editor.cpp
-  const qreal scale = std::min<qreal>(1.0, (800.0 - 16.0) / toolbarWidth);
-  const qreal toolbarX = (800.0 - toolbarWidth * scale) / 2.0;
-  const QPointF button(toolbarX + (6 * 40 + 18) * scale,
-                       105 - 36 * scale - 46 + 18 * scale);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, button.toPoint());
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toolbarButtonCenterForTest(
+                        QStringLiteral("tool-rectangle")));
   application.processEvents();
-  drag(QPoint(500, 480), QPoint(600, 500));
+  drag(QPoint(500, 492), QPoint(600, 512));
   const Annotation viaButton =
       shape(Annotation::Kind::Rectangle, {400, 375}, {500, 395}, true);
   if (!snapshotMatches(
@@ -3595,10 +3690,10 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
   // Alt held from the press: the ellipse is centered on the press point
   // (widget (400,300) = annotation (300,195)) with the cursor on its corner.
   QTest::keyClick(&editor, Qt::Key_E);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(400, 300));
-  QTest::mouseMove(&editor, QPoint(500, 350), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(400, 312));
+  QTest::mouseMove(&editor, QPoint(500, 362), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::AltModifier,
-                      QPoint(500, 350));
+                      QPoint(500, 362));
   application.processEvents();
   const Annotation centeredEllipse =
       shape(Annotation::Kind::Ellipse, {200, 145}, {400, 245});
@@ -3610,10 +3705,10 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
   // Alt+Shift: centered square whose half-extent is the longer drag axis.
   QTest::keyClick(&editor, Qt::Key_R);
   QTest::mousePress(&editor, Qt::LeftButton,
-                    Qt::AltModifier | Qt::ShiftModifier, QPoint(400, 300));
-  QTest::mouseMove(&editor, QPoint(460, 340), 20);
+                    Qt::AltModifier | Qt::ShiftModifier, QPoint(400, 312));
+  QTest::mouseMove(&editor, QPoint(460, 352), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton,
-                      Qt::AltModifier | Qt::ShiftModifier, QPoint(460, 340));
+                      Qt::AltModifier | Qt::ShiftModifier, QPoint(460, 352));
   application.processEvents();
   const Annotation centeredSquare =
       shape(Annotation::Kind::Rectangle, {240, 135}, {360, 255});
@@ -3623,12 +3718,12 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
   }
 
   // Alt pressed mid-drag applies; released before the mouse it does not.
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 200));
-  QTest::mouseMove(&editor, QPoint(250, 230), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 212));
+  QTest::mouseMove(&editor, QPoint(250, 242), 20);
   QTest::keyPress(&editor, Qt::Key_Alt);
   application.processEvents();
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::AltModifier,
-                      QPoint(250, 230));
+                      QPoint(250, 242));
   QTest::keyRelease(&editor, Qt::Key_Alt);
   application.processEvents();
   const Annotation midDrag =
@@ -3637,12 +3732,12 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Alt pressed mid-drag did not center the shape");
     return false;
   }
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(600, 200));
-  QTest::mouseMove(&editor, QPoint(650, 230), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(600, 212));
+  QTest::mouseMove(&editor, QPoint(650, 242), 20);
   QTest::keyRelease(&editor, Qt::Key_Alt);
   application.processEvents();
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(650, 230));
+                      QPoint(650, 242));
   application.processEvents();
   const Annotation released =
       shape(Annotation::Kind::Rectangle, {500, 95}, {550, 125});
@@ -3654,10 +3749,10 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
 
   // Spotlight (FOMOsnap's own drag-rectangle shape) centers the same way.
   QTest::keyClick(&editor, Qt::Key_S);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(600, 400));
-  QTest::mouseMove(&editor, QPoint(660, 440), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(600, 412));
+  QTest::mouseMove(&editor, QPoint(660, 452), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::AltModifier,
-                      QPoint(660, 440));
+                      QPoint(660, 452));
   application.processEvents();
   Annotation spotlight =
       shape(Annotation::Kind::Spotlight, {440, 255}, {560, 335});
@@ -3671,10 +3766,10 @@ bool runCenteredCreationSmoke(QApplication &application, QString &error) {
 
   // Alt leaves lines alone.
   QTest::keyClick(&editor, Qt::Key_L);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(200, 400));
-  QTest::mouseMove(&editor, QPoint(300, 450), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::AltModifier, QPoint(200, 412));
+  QTest::mouseMove(&editor, QPoint(300, 462), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::AltModifier,
-                      QPoint(300, 450));
+                      QPoint(300, 462));
   application.processEvents();
   const Annotation line = shape(Annotation::Kind::Line, {100, 295}, {200, 345});
   if (!snapshotMatches(expected({centeredEllipse, centeredSquare, midDrag,
@@ -3934,7 +4029,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
 
   // New text gets the pill by default.
   QTest::keyClick(&editor, Qt::Key_T);
-  typeText(QPoint(300, 300), QStringLiteral("Pill"));
+  typeText(QPoint(300, 312), QStringLiteral("Pill"));
   const Annotation pill =
       text({200, 195}, QStringLiteral("Pill"), TextBackground::Pill);
   if (!snapshotMatches(expected({pill}))) {
@@ -3944,7 +4039,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
 
   // T again (tool still armed) switches the next text to plain.
   QTest::keyClick(&editor, Qt::Key_T);
-  typeText(QPoint(300, 400), QStringLiteral("Plain"));
+  typeText(QPoint(300, 412), QStringLiteral("Plain"));
   const Annotation plain =
       text({200, 295}, QStringLiteral("Plain"), TextBackground::Plain);
   if (!snapshotMatches(expected({pill, plain}))) {
@@ -3954,7 +4049,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
 
   // T with a text layer selected toggles that layer, undoably.
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(310, 290));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(310, 302));
   QTest::keyClick(&editor, Qt::Key_T);
   application.processEvents();
   Annotation pillNowPlain = pill;
@@ -3975,7 +4070,7 @@ bool runTextPillSmoke(QApplication &application, QString &error) {
   }
 
   // Re-editing keeps the layer's own background.
-  QTest::mouseDClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(310, 410));
+  QTest::mouseDClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(310, 422));
   application.processEvents();
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_End); // text is selected
   QTest::keyClicks(QApplication::focusWidget(), QStringLiteral(" text"));
@@ -4044,12 +4139,12 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
 
   // A rectangle, an arrow and two markers.
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(200, 200), QPoint(400, 300));
+  drag(QPoint(200, 212), QPoint(400, 312));
   QTest::keyClick(&editor, Qt::Key_A);
-  drag(QPoint(450, 200), QPoint(650, 300));
+  drag(QPoint(450, 212), QPoint(650, 312));
   QTest::keyClick(&editor, Qt::Key_M);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 400));
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 400));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 412));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 412));
   application.processEvents();
   const QVector<Annotation> all = {
       layer(Annotation::Kind::Rectangle, {100, 95}, {300, 195}),
@@ -4063,7 +4158,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
 
   // Delete with nothing selected leaves everything alone.
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 480));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 492));
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
   if (!snapshotMatches(expected(all))) {
@@ -4076,7 +4171,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
   QTest::keyClick(&editor, Qt::Key_A, Qt::ControlModifier);
   application.processEvents();
   const QImage grouped = editor.grab().toImage();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 480));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 492));
   application.processEvents();
   if (grouped == editor.grab().toImage()) {
     error = QStringLiteral("Select-all drew no selection indicator");
@@ -4086,7 +4181,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
   // Clicking empty canvas drops the group selection again, so a following
   // Delete is a no-op.
   QTest::keyClick(&editor, Qt::Key_A, Qt::ControlModifier);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 480));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(680, 492));
   QTest::keyClick(&editor, Qt::Key_Backspace);
   application.processEvents();
   if (!snapshotMatches(expected(all))) {
@@ -4096,7 +4191,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
 
   // Cmd+A then Delete removes every layer as one undo step, even with a
   // single layer selected beforehand.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 212));
   QTest::keyClick(&editor, Qt::Key_A, Qt::ControlModifier);
   QTest::keyClick(&editor, Qt::Key_Delete);
   application.processEvents();
@@ -4115,7 +4210,7 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
   QTest::keyClick(&editor, Qt::Key_A, Qt::ControlModifier);
   QTest::keyClick(&editor, Qt::Key_Backspace);
   QTest::keyClick(&editor, Qt::Key_M);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 300));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 312));
   application.processEvents();
   if (!snapshotMatches(
           expected({layer(Annotation::Kind::Marker, {200, 195}, {}, 1)}))) {
@@ -4145,7 +4240,7 @@ bool runDuplicateLayerSmoke(QApplication &application, QString &error) {
   editor.show();
   application.processEvents();
 
-  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  // 600x400 selection shown 1:1 at widget offset (100, 117).
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
@@ -4188,10 +4283,10 @@ bool runDuplicateLayerSmoke(QApplication &application, QString &error) {
   // A rectangle hugging the left edge: the default down-left offset would
   // leave the canvas, so the copy goes down-right instead.
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(120, 200), QPoint(220, 260));
+  drag(QPoint(120, 212), QPoint(220, 272));
   const Annotation left = rectangle({20, 95}, {120, 155});
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(170, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(170, 212));
   QTest::keyClick(&editor, Qt::Key_D, Qt::AltModifier);
   application.processEvents();
   const Annotation leftCopy = rectangle({120, 195}, {220, 255});
@@ -4203,13 +4298,13 @@ bool runDuplicateLayerSmoke(QApplication &application, QString &error) {
   // Mid-canvas: down-left, and chained Alt+D keeps stepping from the copy.
   // R with a rectangle selected toggles that layer's fill (#56), so drop the
   // selection before arming the tool.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 450));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 462));
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(400, 250), QPoint(500, 300));
+  drag(QPoint(400, 262), QPoint(500, 312));
   const Annotation middle = rectangle({300, 145}, {400, 195});
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(450, 250));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(450, 262));
   QTest::keyClick(&editor, Qt::Key_D, Qt::AltModifier);
   QTest::keyClick(&editor, Qt::Key_D, Qt::AltModifier);
   application.processEvents();
@@ -4224,12 +4319,12 @@ bool runDuplicateLayerSmoke(QApplication &application, QString &error) {
   // A duplicated marker takes the next number.
   // Alt+D leaves the copy selected; a Marker press on empty canvas first
   // puts that layer down (#65) and would not stamp, so drop the selection.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 450));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 462));
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_C);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(600, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(600, 212));
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(600, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(600, 212));
   QTest::keyClick(&editor, Qt::Key_D, Qt::AltModifier);
   application.processEvents();
   const Annotation first = marker({500, 95}, 1);
@@ -4289,7 +4384,7 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  // 600x400 selection shown 1:1 at widget offset (100, 117).
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
@@ -4318,10 +4413,10 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
   };
 
   QTest::keyClick(&editor, Qt::Key_R);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 200));
-  QTest::mouseMove(&editor, QPoint(400, 300), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 212));
+  QTest::mouseMove(&editor, QPoint(400, 312), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(400, 300));
+                      QPoint(400, 312));
   application.processEvents();
   const Annotation drawn = rectangle({100, 95}, {300, 195});
   if (!snapshotMatches(drawn)) {
@@ -4340,7 +4435,7 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
 
   // Select the rectangle on its stroke, then nudge: quick presses coalesce
   // into one undo entry.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 212));
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_Right);
   QTest::keyClick(&editor, Qt::Key_Right);
@@ -4383,7 +4478,7 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
   // Arrow keys typed into the inline text editor edit text, not layers:
   // with the rectangle still selected, open a text field and press Down.
   QTest::keyClick(&editor, Qt::Key_T);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(500, 450));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(500, 462));
   application.processEvents();
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_Down);
   QTest::keyClick(QApplication::focusWidget(), Qt::Key_Escape);
@@ -4393,16 +4488,16 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
     return false;
   }
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(300, 212));
   application.processEvents();
 
   // Shift while dragging the end handle keeps the original 2:1 aspect ratio;
   // the axis scaled more (x: 200 -> 300) wins, so y follows to 150.
   QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                    QPoint(400, 300));
-  QTest::mouseMove(&editor, QPoint(500, 320), 20);
+                    QPoint(400, 312));
+  QTest::mouseMove(&editor, QPoint(500, 332), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
-                      QPoint(500, 320));
+                      QPoint(500, 332));
   application.processEvents();
   if (!snapshotMatches(rectangle({100, 95}, {400, 245}))) {
     error = QStringLiteral("Shift resize did not keep the aspect ratio");
@@ -4415,10 +4510,10 @@ bool runKeyboardNudgeSmoke(QApplication &application, QString &error) {
     return false;
   }
   // Without Shift the same drag lands on the raw point.
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 300));
-  QTest::mouseMove(&editor, QPoint(500, 320), 20);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 312));
+  QTest::mouseMove(&editor, QPoint(500, 332), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(500, 320));
+                      QPoint(500, 332));
   application.processEvents();
   if (!snapshotMatches(rectangle({100, 95}, {400, 215}))) {
     error = QStringLiteral("Plain resize was constrained without Shift");
@@ -4448,7 +4543,7 @@ bool runLayerHandlesSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  // 600x400 selection shown 1:1 at widget offset (100, 116).
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
@@ -4474,20 +4569,20 @@ bool runLayerHandlesSmoke(QApplication &application, QString &error) {
 
   // A rectangle at annotation (100,95)-(300,195).
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(200, 200), QPoint(400, 300));
+  drag(QPoint(200, 211), QPoint(400, 311));
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 250));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 261));
   application.processEvents();
 
-  // Its right edge midpoint is at widget (400,250): a side handle stretches
+  // Its right edge midpoint is at widget (400,261): a side handle stretches
   // that axis and leaves the other alone, however far the pointer wanders.
-  QTest::mouseMove(&editor, QPoint(400, 250), 10);
+  QTest::mouseMove(&editor, QPoint(400, 261), 10);
   application.processEvents();
   if (editor.cursor().shape() != Qt::SizeHorCursor) {
     error = QStringLiteral("A box offered no handle on its right edge");
     return false;
   }
-  drag(QPoint(400, 250), QPoint(460, 320));
+  drag(QPoint(400, 261), QPoint(460, 331));
   {
     const QRect after = inkBounds(flushedSnapshot(editor, snapshotPath));
     if (std::abs(after.right() - 360) > 4) {
@@ -4502,7 +4597,7 @@ bool runLayerHandlesSmoke(QApplication &application, QString &error) {
 
   // Dragged through itself, the box comes out the other side rather than
   // collapsing against the edge it crossed.
-  drag(QPoint(460, 250), QPoint(150, 250));
+  drag(QPoint(460, 261), QPoint(150, 261));
   {
     const QRect flipped = inkBounds(flushedSnapshot(editor, snapshotPath));
     if (flipped.width() < 20) {
@@ -4852,14 +4947,14 @@ bool runLayerOrderSmoke(QApplication &application, QString &error) {
 
   // Two overlapping strokes in different colors: the second is on top.
   QTest::keyClick(&editor, Qt::Key_L);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 300));
-  QTest::mouseMove(&editor, QPoint(500, 300), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(500, 300));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 311));
+  QTest::mouseMove(&editor, QPoint(500, 311), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(500, 311));
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_4);
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 200));
-  QTest::mouseMove(&editor, QPoint(350, 400), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 400));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 211));
+  QTest::mouseMove(&editor, QPoint(350, 411), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(350, 411));
   application.processEvents();
   const QPoint crossing(250, 195); // annotation coords, where they meet
   const QImage drawn = flushedSnapshot(editor, snapshotPath);
@@ -4871,7 +4966,7 @@ bool runLayerOrderSmoke(QApplication &application, QString &error) {
 
   // Picking the first one up puts it back on top.
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(220, 300));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(220, 311));
   application.processEvents();
   const QColor raised =
       flushedSnapshot(editor, snapshotPath).pixelColor(crossing);
@@ -4891,8 +4986,8 @@ bool runLayerOrderSmoke(QApplication &application, QString &error) {
   // The undo left a layer selected, so the first click puts it down and the
   // second places the counter.
   QTest::keyClick(&editor, Qt::Key_C);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 200));
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 200));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 211));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 211));
   application.processEvents();
   const QPoint counterCenter(520, 95);
   const QColor counterInk =
@@ -4905,9 +5000,9 @@ bool runLayerOrderSmoke(QApplication &application, QString &error) {
   // in plain order it would take the middle of the counter.
   QTest::keyClick(&editor, Qt::Key_L);
   QTest::keyClick(&editor, Qt::Key_4); // a color the counter is not
-  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(560, 200));
-  QTest::mouseMove(&editor, QPoint(690, 200), 20);
-  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(690, 200));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(560, 211));
+  QTest::mouseMove(&editor, QPoint(690, 211), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(690, 211));
   application.processEvents();
   if (flushedSnapshot(editor, snapshotPath).pixelColor(counterCenter) !=
       counterInk) {
@@ -5284,7 +5379,7 @@ bool runLayerWeightSmoke(QApplication &application, QString &error) {
   editor.resize(800, 600);
   editor.show();
   application.processEvents();
-  // 600x400 selection shown 1:1 at widget offset (100, 105).
+  // 600x400 selection shown 1:1 at widget offset (100, 117).
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
@@ -5941,6 +6036,10 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 126;
   }
+  if (!runOverlayChromeLayoutCheck(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 127;
+  }
   if (!runStuckModifierSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 97;
@@ -6316,16 +6415,23 @@ int main(int argc, char **argv) {
     };
     // Arm once: pressing R again would toggle the fill instead.
     QTest::keyClick(&constraintEditor, Qt::Key_R);
+    const QPointF constraintOrigin =
+        constraintEditor.editImageRectForTest().topLeft();
+    const qreal constraintScale = constraintEditor.editScaleForTest();
+    const QPoint dragPress =
+        (constraintOrigin + QPointF(175, 100) * constraintScale).toPoint();
+    const QPoint dragTo =
+        (constraintOrigin + QPointF(295, 160) * constraintScale).toPoint();
     const auto dragRectangle = [&](bool releaseShiftBeforeMouse) {
       QTest::mousePress(&constraintEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(300, 220));
-      QTest::mouseMove(&constraintEditor, QPoint(420, 280), 20);
+                        dragPress);
+      QTest::mouseMove(&constraintEditor, dragTo, 20);
       QTest::keyPress(&constraintEditor, Qt::Key_Shift);
       application.processEvents();
       if (releaseShiftBeforeMouse)
         QTest::keyRelease(&constraintEditor, Qt::Key_Shift);
       QTest::mouseRelease(&constraintEditor, Qt::LeftButton, Qt::NoModifier,
-                          QPoint(420, 280));
+                          dragTo);
       if (!releaseShiftBeforeMouse)
         QTest::keyRelease(&constraintEditor, Qt::Key_Shift);
       application.processEvents();
@@ -6378,13 +6484,7 @@ int main(int argc, char **argv) {
     cropEditor.resize(800, 600);
     cropEditor.show();
     application.processEvents();
-    const QRectF available(30, 68, 740, 474);
-    const qreal scale = std::min<qreal>(
-        {1.0, available.width() / 64.0, available.height() / 64.0});
-    const QSizeF shown(64.0 * scale, 64.0 * scale);
-    const QRectF image(available.center().x() - shown.width() / 2.0,
-                       available.center().y() - shown.height() / 2.0,
-                       shown.width(), shown.height());
+    const QRectF image = cropEditor.editImageRectForTest();
     const QPoint leftHandle(qRound(image.left() - 7.0),
                             qRound(image.center().y()));
     QTest::mousePress(&cropEditor, Qt::LeftButton, Qt::NoModifier, leftHandle);
@@ -6556,8 +6656,12 @@ int main(int argc, char **argv) {
   const QImage beforeTextSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_T);
   // Text size options appear when the text button is hovered.
-  QTest::mouseMove(&editor, QPoint(398, 43), 10);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(359, 78));
+  QTest::mouseMove(&editor,
+                   editor.toolbarButtonCenterForTest(QStringLiteral("tool-text")),
+                   10);
+  application.processEvents();
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.textSizePanelRectForTest().center().toPoint());
   QWheelEvent textSizeWheel(QPointF(360, 320), QPointF(360, 320), {}, {0, -120},
                             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                             false);
@@ -6631,15 +6735,20 @@ int main(int argc, char **argv) {
   if (flushedSnapshot(editor, snapshotPath) == beforeBackdropSnapshot)
     return 55;
   // Palette toolbar button after the grouped shape controls.
-  QTest::mouseMove(&editor, QPoint(435, 43), 20);
+  QTest::mouseMove(&editor,
+                   editor.toolbarButtonCenterForTest(QStringLiteral("palette")),
+                   20);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-palette.png"), "PNG"))
     return 14;
   // Custom color control in the open palette strip.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(531, 81));
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    editor.toolbarButtonCenterForTest(QStringLiteral("custom-color")));
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 200));
   // Freehand toolbar button.
-  QTest::mouseMove(&editor, QPoint(130, 43), 20);
+  QTest::mouseMove(&editor,
+                   editor.toolbarButtonCenterForTest(QStringLiteral("tool-freehand")),
+                   20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor)
     return 12;
@@ -6659,22 +6768,28 @@ int main(int argc, char **argv) {
     QTest::mouseMove(&redactionEditor, QPoint(650, 470), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
                         QPoint(650, 470));
+    const QPointF redactOrigin =
+        redactionEditor.editImageRectForTest().topLeft();
+    const qreal redactScale = redactionEditor.editScaleForTest();
+    const auto redactToScreen = [&](const QPointF &point) {
+      return (redactOrigin + point * redactScale).toPoint();
+    };
     const QImage beforeRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     const QImage beforeRedactionUi = redactionEditor.grab().toImage();
     QTest::keyClick(&redactionEditor, Qt::Key_D);
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(300, 200));
-    QTest::mouseMove(&redactionEditor, QPoint(420, 200), 20);
+                      redactToScreen({175, 80}));
+    QTest::mouseMove(&redactionEditor, redactToScreen({295, 80}), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(420, 200));
+                        redactToScreen({295, 80}));
     application.processEvents();
     if (flushedSnapshot(redactionEditor, snapshotPath) != beforeRedaction)
       return 72;
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(300, 200));
-    QTest::mouseMove(&redactionEditor, QPoint(420, 260), 20);
+                      redactToScreen({175, 80}));
+    QTest::mouseMove(&redactionEditor, redactToScreen({295, 140}), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(420, 260));
+                        redactToScreen({295, 140}));
     application.processEvents();
     const QImage pixelatedRedactionUi = redactionEditor.grab().toImage();
     if (pixelatedRedactionUi == beforeRedactionUi)
@@ -6685,7 +6800,7 @@ int main(int argc, char **argv) {
 
     QTest::keyClick(&redactionEditor, Qt::Key_V);
     QTest::mouseClick(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(360, 230));
+                      QPoint(360, 242));
     QTest::keyClick(&redactionEditor, Qt::Key_D);
     application.processEvents();
     const QImage solidRedaction = flushedSnapshot(redactionEditor, snapshotPath);
@@ -6701,10 +6816,10 @@ int main(int argc, char **argv) {
       return 76;
 
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(360, 230));
-    QTest::mouseMove(&redactionEditor, QPoint(380, 245), 20);
+                      QPoint(360, 242));
+    QTest::mouseMove(&redactionEditor, QPoint(380, 257), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(380, 245));
+                        QPoint(380, 257));
     application.processEvents();
     const QImage movedRedaction = flushedSnapshot(redactionEditor, snapshotPath);
     if (movedRedaction.isNull() || movedRedaction == solidRedaction)
@@ -6716,20 +6831,20 @@ int main(int argc, char **argv) {
 
     QTest::keyClick(&redactionEditor, Qt::Key_D);
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(300, 200));
-    QTest::mouseMove(&redactionEditor, QPoint(280, 190), 20);
+                      QPoint(300, 212));
+    QTest::mouseMove(&redactionEditor, QPoint(280, 202), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(280, 190));
+                        QPoint(280, 202));
     application.processEvents();
     if (flushedSnapshot(redactionEditor, snapshotPath) == solidRedaction ||
         !redactionEditor.grab().save(
             outputRoot + QStringLiteral("-secure-redaction.png"), "PNG"))
       return 79;
     QTest::mousePress(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(280, 190));
-    QTest::mouseMove(&redactionEditor, QPoint(420, 190), 20);
+                      QPoint(280, 202));
+    QTest::mouseMove(&redactionEditor, QPoint(420, 202), 20);
     QTest::mouseRelease(&redactionEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(420, 190));
+                        QPoint(420, 202));
     application.processEvents();
     if (flushedSnapshot(redactionEditor, snapshotPath) == beforeRedaction)
       return 81;
@@ -6747,41 +6862,41 @@ int main(int argc, char **argv) {
                         QPoint(650, 470));
     QTest::keyClick(&overlapEditor, Qt::Key_L);
     QTest::mousePress(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(300, 300));
-    QTest::mouseMove(&overlapEditor, QPoint(500, 300), 20);
+                      QPoint(300, 312));
+    QTest::mouseMove(&overlapEditor, QPoint(500, 312), 20);
     QTest::mouseRelease(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(500, 300));
+                        QPoint(500, 312));
     QTest::keyClick(&overlapEditor, Qt::Key_D);
     QTest::mousePress(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(350, 270));
-    QTest::mouseMove(&overlapEditor, QPoint(450, 330), 20);
+                      QPoint(350, 282));
+    QTest::mouseMove(&overlapEditor, QPoint(450, 342), 20);
     QTest::mouseRelease(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(450, 330));
+                        QPoint(450, 342));
     QTest::keyClick(&overlapEditor, Qt::Key_V);
     QTest::mouseClick(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(400, 300));
+                      QPoint(400, 312));
     application.processEvents();
     const QImage overlapUi = overlapEditor.grab().toImage();
-    if (overlapUi.pixelColor(300, 300) != QColor(QStringLiteral("#0a84ff")) ||
-        overlapUi.pixelColor(500, 300) != QColor(QStringLiteral("#0a84ff")) ||
+    if (overlapUi.pixelColor(300, 312) != QColor(QStringLiteral("#0a84ff")) ||
+        overlapUi.pixelColor(500, 312) != QColor(QStringLiteral("#0a84ff")) ||
         !overlapUi.save(outputRoot + QStringLiteral("-redaction-overlap.png"),
                         "PNG"))
       return 80;
 
     QTest::keyClick(&overlapEditor, Qt::Key_R);
     QTest::mousePress(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(330, 250));
-    QTest::mouseMove(&overlapEditor, QPoint(470, 350), 20);
+                      QPoint(330, 262));
+    QTest::mouseMove(&overlapEditor, QPoint(470, 362), 20);
     QTest::mouseRelease(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                        QPoint(470, 350));
+                        QPoint(470, 362));
     QTest::keyClick(&overlapEditor, Qt::Key_V);
     QTest::mouseClick(&overlapEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(400, 285));
+                      QPoint(400, 297));
     application.processEvents();
     const QImage enclosedRedactionUi = overlapEditor.grab().toImage();
-    if (enclosedRedactionUi.pixelColor(350, 270) !=
+    if (enclosedRedactionUi.pixelColor(350, 282) !=
             QColor(QStringLiteral("#0a84ff")) ||
-        enclosedRedactionUi.pixelColor(450, 330) !=
+        enclosedRedactionUi.pixelColor(450, 342) !=
             QColor(QStringLiteral("#0a84ff")))
       return 84;
   }
@@ -6796,13 +6911,13 @@ int main(int argc, char **argv) {
   compactToolbarEditor.resize(720, 600);
   compactToolbarEditor.show();
   application.processEvents();
-  QTest::mouseMove(&compactToolbarEditor, QPoint(20, 25), 20);
+  QTest::mouseMove(&compactToolbarEditor, QPoint(20, 54), 20);
   application.processEvents();
-  QTest::mouseMove(&compactToolbarEditor, QPoint(700, 25), 20);
+  QTest::mouseMove(&compactToolbarEditor, QPoint(700, 54), 20);
   application.processEvents();
   const QImage compactToolbarUi = compactToolbarEditor.grab().toImage();
-  if (compactToolbarUi.pixelColor(20, 25).alpha() < 240 ||
-      compactToolbarUi.pixelColor(700, 25).alpha() < 240 ||
+  if (compactToolbarUi.pixelColor(20, 54).alpha() < 240 ||
+      compactToolbarUi.pixelColor(700, 54).alpha() < 240 ||
       !compactToolbarUi.save(
           outputRoot + QStringLiteral("-compact-toolbar.png"), "PNG"))
     return 83;
@@ -6858,7 +6973,11 @@ int main(int argc, char **argv) {
     return 16;
 
   // File mode opens an existing image straight into the edit phase: whole
-  // image selected, arrow cursor, annotation canvas showing the pixels.
+  // image selected, Select tool armed, annotation canvas showing the pixels.
+  // (Not asserting the cursor shape here: with several editors from earlier
+  // in this sequence never closed, a synthetic move can be delivered to an
+  // older top-level window instead of this one, at the same offscreen
+  // position, which armedToolForTest() does not depend on.)
   CaptureData fileData;
   fileData.monitor.scale = 1.0;
   fileData.monitor.pixelSize = {300, 200};
@@ -6870,7 +6989,7 @@ int main(int argc, char **argv) {
   fileEditor.show();
   application.processEvents();
   const QImage fileUi = fileEditor.grab().toImage();
-  if (fileEditor.cursor().shape() != Qt::ArrowCursor ||
+  if (fileEditor.armedToolForTest() != CaptureEditor::Tool::Select ||
       fileUi.pixelColor(400, 305) != QColor(QStringLiteral("#1a2b3c")) ||
       !fileUi.save(outputRoot + QStringLiteral("-file-mode.png"), "PNG"))
     return 70;
@@ -6909,23 +7028,23 @@ int main(int argc, char **argv) {
   application.processEvents();
   QTest::keyClick(&cropEditor, Qt::Key_L);
   QTest::mousePress(&cropEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(260, 210));
-  QTest::mouseMove(&cropEditor, QPoint(520, 265), 20);
+                    QPoint(260, 222));
+  QTest::mouseMove(&cropEditor, QPoint(520, 277), 20);
   QTest::mouseRelease(&cropEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(520, 265));
+                      QPoint(520, 277));
   QTest::keyClick(&cropEditor, Qt::Key_V);
   QTest::mouseClick(&cropEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(390, 238));
+                    QPoint(390, 250));
   application.processEvents();
   const QImage beforeCrop = cropEditor.grab().toImage();
   if (!beforeCrop.save(outputRoot + QStringLiteral("-crop-handles.png"), "PNG"))
     return 31;
-  QTest::mouseMove(&cropEditor, QPoint(682, 497), 20);
+  QTest::mouseMove(&cropEditor, QPoint(682, 509), 20);
   QTest::mousePress(&cropEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(682, 497));
-  QTest::mouseMove(&cropEditor, QPoint(620, 440), 20);
+                    QPoint(682, 509));
+  QTest::mouseMove(&cropEditor, QPoint(620, 452), 20);
   QTest::mouseRelease(&cropEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(620, 440));
+                      QPoint(620, 452));
   application.processEvents();
   const QImage afterCrop = cropEditor.grab().toImage();
   if (beforeCrop == afterCrop ||
@@ -6933,7 +7052,7 @@ int main(int argc, char **argv) {
     return 32;
   QTest::keyClick(&cropEditor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
-  if (cropEditor.grab().toImage().pixelColor(260, 210) !=
+  if (cropEditor.grab().toImage().pixelColor(260, 222) !=
       QColor(QStringLiteral("#0a84ff")))
     return 58;
 
@@ -6948,16 +7067,16 @@ int main(int argc, char **argv) {
                       QPoint(650, 470));
   QTest::keyClick(&previewClipEditor, Qt::Key_C);
   QTest::mouseClick(&previewClipEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(640, 300));
+                    QPoint(640, 312));
   QTest::keyClick(&previewClipEditor, Qt::Key_B);
   QTest::mousePress(&previewClipEditor, Qt::LeftButton, Qt::NoModifier,
-                    QPoint(682, 305));
-  QTest::mouseMove(&previewClipEditor, QPoint(500, 305), 20);
+                    QPoint(682, 317));
+  QTest::mouseMove(&previewClipEditor, QPoint(500, 317), 20);
   QTest::mouseRelease(&previewClipEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(500, 305));
+                      QPoint(500, 317));
   application.processEvents();
   const QImage clippedPreview = previewClipEditor.grab().toImage();
-  for (int y = 270; y <= 330; ++y) {
+  for (int y = 282; y <= 342; ++y) {
     for (int x = 690; x <= 760; ++x) {
       const QColor pixel = clippedPreview.pixelColor(x, y);
       if (pixel.red() > 240 && pixel.green() < 96 && pixel.blue() < 128)
@@ -7093,7 +7212,7 @@ int main(int argc, char **argv) {
     qputenv("OMARCHY_OCR_LANGS", savedOmarchyLangs);
   if (!fallbackOcr.contains(QStringLiteral("OCR smoke test 42")))
     return 65;
-  QTest::mouseMove(&editor, QPoint(400, 300), 20);
+  QTest::mouseMove(&editor, QPoint(400, 312), 20);
   QTest::keyClick(&editor, Qt::Key_T);
   QTest::keyClick(&editor, Qt::Key_Escape);
   application.processEvents();
@@ -7117,7 +7236,7 @@ int main(int argc, char **argv) {
                         QPoint(650, 470));
     QTest::keyClick(&finishEditor, Qt::Key_C);
     QTest::mouseClick(&finishEditor, Qt::LeftButton, Qt::NoModifier,
-                      QPoint(470, 300));
+                      QPoint(470, 312));
     application.processEvents();
     const QImage snapshotBeforeSave =
         flushedSnapshot(finishEditor, snapshotPath)

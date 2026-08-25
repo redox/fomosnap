@@ -22,6 +22,11 @@ struct CaptureTab {
   CaptureKind kind;
   QRectF rect;
 };
+/// Visible height of the tab strip's background, from the top edge (the
+/// strip is flush against it) to its rounded bottom — fixed regardless of
+/// window size, since only the horizontal layout changes with the surface.
+/// Chrome stacked below the strip anchors to this, not a guessed constant.
+constexpr qreal kCaptureTabBarBottom = 31.0;
 [[nodiscard]] QString captureTabLabel(CaptureKind kind);
 /// Tab positions for a surface of `bounds`, hanging off the top edge.
 [[nodiscard]] QVector<CaptureTab> captureTabLayout(const QRect &bounds);
@@ -29,8 +34,12 @@ struct CaptureTab {
 [[nodiscard]] int captureTabAt(const QVector<CaptureTab> &tabs,
                                const QPointF &position);
 /// Draws the strip; `active` is lit, the tab under `cursor` is hinted.
+/// `bounds` is the usable surface (below a notch): the bar may hang off the
+/// top of that rect, but it is clipped so it cannot paint into the unsafe
+/// area above it.
 void drawCaptureTabs(QPainter &painter, const QVector<CaptureTab> &tabs,
-                     CaptureKind active, const QPointF &cursor);
+                     CaptureKind active, const QPointF &cursor,
+                     const QRect &bounds);
 
 /// The badge naming what the overlay is doing, centered at the top, with the ×
 /// that leaves it. Returns the whole badge; `closeRect` is the × alone, for

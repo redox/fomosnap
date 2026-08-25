@@ -83,7 +83,12 @@ namespace {
 constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
 constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
 constexpr qreal kToolbarWidth = 840;
-constexpr qreal kToolbarImageGap = 46;
+// Toolbar row to the image when the capture sits lower than the tab strip.
+constexpr qreal kToolbarImageGap = 46.0;
+// Tight band reserved above a tall image so it cannot slide under the row.
+constexpr qreal kImageChromeGap = 18.0;
+// Tab strip's bottom edge to the toolbar when the image sits against it.
+constexpr qreal kTabToolbarGap = 8.0;
 constexpr qreal kMinimumRedactionExtent = 5.0;
 constexpr int kBackdropDim = 143;
 constexpr int kPointerSyncMs = 16;
@@ -1654,7 +1659,7 @@ QRectF CaptureEditor::colorPaletteRect() const {
   const qreal buttonHeight = 36 * scale;
   const qreal toolbarX = (width() - toolbarWidth) / 2.0;
   const qreal toolbarY =
-      std::max<qreal>(10, chromeAnchorTop() - buttonHeight - kToolbarImageGap);
+      toolbarTop();
   const QRectF anchor(toolbarX + 440 * scale, toolbarY, 36 * scale,
                       buttonHeight);
   const qreal paletteWidth =
@@ -1679,7 +1684,7 @@ QRectF CaptureEditor::shapeMenuRect() const {
   const qreal toolbarX = (width() - kToolbarWidth * scale) / 2.0;
   const qreal buttonHeight = 36 * scale;
   const qreal toolbarY =
-      std::max<qreal>(10, chromeAnchorTop() - buttonHeight - kToolbarImageGap);
+      toolbarTop();
   const QRectF anchor(toolbarX + 240 * scale, toolbarY, buttonHeight,
                       buttonHeight);
   return {anchor.center().x() - 58, anchor.bottom() + 4, 116, 36};
@@ -1691,7 +1696,7 @@ QRectF CaptureEditor::textSizePanelRect() const {
   const qreal buttonHeight = 36 * scale;
   const qreal toolbarX = (width() - toolbarWidth) / 2.0;
   const qreal toolbarY =
-      std::max<qreal>(10, chromeAnchorTop() - buttonHeight - kToolbarImageGap);
+      toolbarTop();
   const QRectF anchor(toolbarX + 400 * scale, toolbarY, 36 * scale,
                       buttonHeight);
   return {anchor.center().x() - 51, anchor.bottom() + 6, 102, 34};
@@ -1736,25 +1741,47 @@ QRectF CaptureEditor::normalizedSelection(const QPointF &first,
   return QRectF(a, b).normalized();
 }
 
+qreal CaptureEditor::tabStripBottom() const {
+  return kCaptureTabBarBottom + safeAreaTop_;
+}
+
+qreal CaptureEditor::toolbarTop() const {
+  // Sit just above the screenshot the way the overlay did before the tab
+  // strip existed, but never climb onto the strip itself. Zoomed past fit
+  // the content fills the reserved band, so the row stays under the tabs.
+  const qreal buttonHeight = 36.0 * toolbarScale(width());
+  const qreal tabFloor = tabStripBottom() + kTabToolbarGap;
+  if (viewZoom_ > 1.0)
+    return tabFloor;
+  const qreal besideImage =
+      baseImageRect().top() - buttonHeight - kToolbarImageGap;
+  return std::max(tabFloor, besideImage);
+}
+
+qreal CaptureEditor::imageTopMargin() const {
+  // Room for the tab strip, a toolbar row, and a tight gap: a tall image
+  // shrinks to fit. The wider kToolbarImageGap is only for placing the
+  // row next to a capture that sits lower in the window.
+  return std::round(tabStripBottom() + kTabToolbarGap +
+                    36.0 * toolbarScale(width()) + kImageChromeGap);
+}
+
 QRectF CaptureEditor::baseImageRect() const {
   if (selection_.isEmpty())
     return {};
-  const QRectF available(30, 68, std::max(1, width() - 60),
-                         std::max(1, height() - 126));
+  const qreal top = imageTopMargin();
+  const QRectF available(30, top, std::max(1, width() - 60),
+                         std::max<qreal>(1, height() - top - 58));
   const qreal scale =
       std::min<qreal>({1.0, available.width() / selection_.width(),
                        available.height() / selection_.height()});
   const QSizeF shown = selection_.size() * scale;
-  return {available.center().x() - shown.width() / 2.0,
-          available.center().y() - shown.height() / 2.0, shown.width(),
-          shown.height()};
-}
-
-qreal CaptureEditor::chromeAnchorTop() const {
-  // Zoomed past fit the content fills the viewport band, so anchoring to the
-  // centered fit rect would float the chrome over it. Anchor to the band.
-  const qreal base = baseImageRect().top();
-  return viewZoom_ > 1.0 ? std::min<qreal>(base, 68.0) : base;
+  // Snapped to the pixel grid: centering can land the origin on a half
+  // pixel, which is needless blur at scale 1 (the common case, an
+  // unscaled or lightly cropped capture) for no visual benefit.
+  return {std::round(available.center().x() - shown.width() / 2.0),
+          std::round(available.center().y() - shown.height() / 2.0),
+          shown.width(), shown.height()};
 }
 
 QRectF CaptureEditor::editImageRect() const {
@@ -2025,8 +2052,7 @@ QVector<CaptureEditor::ToolbarButton> CaptureEditor::toolbarButtons() const {
   const qreal gap = 4 * scale;
   const qreal total = kToolbarWidth * scale;
   qreal x = (width() - total) / 2.0;
-  const qreal y =
-      std::max<qreal>(10, chromeAnchorTop() - height - kToolbarImageGap);
+  const qreal y = toolbarTop();
   auto add = [&](qreal buttonWidth, QString action, QString label,
                  QString tooltip, QColor color = {}) {
     const qreal scaledWidth = buttonWidth * scale;
@@ -4837,6 +4863,7 @@ void CaptureEditor::startScrollCapture(const QRect &region) {
   dragging_ = false;
   selection_ = {};
   auto *panel = new ScrollCapturePanel(liveMonitor_, this);
+  panel->setSafeAreaTop(safeAreaTop_);
   scrollPanel_ = panel;
   connect(panel, &ScrollCapturePanel::stitched, this,
           [this](const QImage &image) {
@@ -5315,7 +5342,7 @@ void CaptureEditor::paintSelectTabs(QPainter &painter) {
   // edit phase it is how this capture was taken.
   const CaptureKind active =
       phase_ == Phase::Edit ? editedKind_ : selectKind();
-  drawCaptureTabs(painter, selectTabItems(), active, cursor_);
+  drawCaptureTabs(painter, selectTabItems(), active, cursor_, chromeBounds());
 }
 
 void CaptureEditor::paintSelect(QPainter &painter) {
@@ -5358,7 +5385,6 @@ void CaptureEditor::paintSelect(QPainter &painter) {
     painter.drawLine(QPointF(0, cursor_.y()), QPointF(width(), cursor_.y()));
   }
   paintRecents(painter);
-
   paintSelectTabs(painter);
   drawHotkeyLegend(painter, chromeBounds(), cursor_,
                    {{QStringLiteral("Drag"), QStringLiteral("Area")},
@@ -5392,7 +5418,9 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   const bool clipViewport = viewZoom_ > 1.0;
   if (clipViewport) {
     painter.save();
-    painter.setClipRect(QRectF(0, 60, width(), std::max(1, height() - 116)));
+    const qreal top = imageTopMargin();
+    painter.setClipRect(
+        QRectF(0, top, width(), std::max<qreal>(1, height() - top - 58)));
   }
   const QRectF image = editImageRect();
   const bool hasBackground = backgroundStyle_ != BackgroundStyle::None;
