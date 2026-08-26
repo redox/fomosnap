@@ -1,5 +1,6 @@
 #pragma once
 
+#include "background-config.hpp"
 #include "capture.hpp"
 #include "cut.hpp"
 #include "overlay-chrome.hpp"
@@ -676,6 +677,12 @@ private:
   BackgroundStyle backgroundStyle_ = BackgroundStyle::None;
   bool imageShadow_ = true;
   CanvasBoundaryMode canvasBoundaryMode_ = CanvasBoundaryMode::Framed;
+  /** `[background]` config: custom image path and the style a fresh capture
+   *  starts with. Loaded once in the constructor. */
+  BackgroundConfig backgroundConfig_;
+  /** Loaded from `backgroundConfig_.imagePath`; null when unset or the file
+   *  failed to load, in which case `BackgroundStyle::Custom` is unavailable. */
+  QImage customBackdrop_;
   bool busy_ = false;
   bool colorPaletteOpen_ = false;
   bool customColorPickerOpen_ = false;

@@ -746,10 +746,27 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
 }
 
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
-                            BackgroundStyle backgroundStyle) {
+                            BackgroundStyle backgroundStyle,
+                            const QImage &customBackdrop) {
   if (backgroundStyle == BackgroundStyle::None ||
       backgroundStyle == BackgroundStyle::Off)
     return;
+  if (backgroundStyle == BackgroundStyle::Custom) {
+    if (customBackdrop.isNull())
+      return; // configured image never loaded; behave like None
+    // Cover-fit: scale to fill `bounds` and center-crop the overhang, the
+    // same way a desktop wallpaper covers a screen of a different aspect.
+    const QSizeF imageSize(customBackdrop.size());
+    const qreal scale = std::max(bounds.width() / imageSize.width(),
+                                 bounds.height() / imageSize.height());
+    const QSizeF scaledSize = imageSize * scale;
+    const QRectF target(
+        bounds.center() -
+            QPointF(scaledSize.width(), scaledSize.height()) / 2.0,
+        scaledSize);
+    painter.drawImage(target, customBackdrop);
+    return;
+  }
   if (backgroundStyle == BackgroundStyle::Slate) {
     // Slate is the opaque mat; the image shadow is painted separately.
     painter.fillRect(bounds, QColor(QStringLiteral("#242424")));
@@ -921,7 +938,8 @@ bool captureFocusedMonitor(CaptureData &capture, bool includeWindows,
 QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                      const QVector<Annotation> &annotations,
                      BackgroundStyle backgroundStyle, bool imageShadow,
-                     CanvasBoundaryMode boundaryMode) {
+                     CanvasBoundaryMode boundaryMode,
+                     const QImage &customBackdrop) {
   const QRect pixels = pixelSelection(capture, selection);
   if (pixels.isEmpty())
     return {};
@@ -968,8 +986,11 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
       backgroundStyle == BackgroundStyle::None;
   const BackgroundStyle effectiveBackground =
       automaticFramedBackground ? BackgroundStyle::Slate : backgroundStyle;
-  const bool hasBackground = effectiveBackground != BackgroundStyle::None &&
-                             effectiveBackground != BackgroundStyle::Off;
+  const bool hasBackground =
+      effectiveBackground != BackgroundStyle::None &&
+      effectiveBackground != BackgroundStyle::Off &&
+      (effectiveBackground != BackgroundStyle::Custom ||
+       !customBackdrop.isNull());
 
   if (canvasGrown) {
     // The source frame and annotation canvas are intentionally separate.
@@ -996,7 +1017,8 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
     painter.setRenderHints(QPainter::Antialiasing |
                            QPainter::SmoothPixmapTransform |
                            QPainter::TextAntialiasing);
-    paintCaptureBackground(painter, output.rect(), effectiveBackground);
+    paintCaptureBackground(painter, output.rect(), effectiveBackground,
+                           customBackdrop);
     // The extension is one continuous mat. Its shadow belongs only to the
     // original source card; annotations paint over both in the next pass.
     const QRectF imageRect(growLeft, growTop, cropped.width(), cropped.height());
@@ -1045,7 +1067,8 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
                          QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);
   if (framedBackground) {
-    paintCaptureBackground(painter, output.rect(), effectiveBackground);
+    paintCaptureBackground(painter, output.rect(), effectiveBackground,
+                           customBackdrop);
     const QRectF imageRect(marginX, marginY, cropped.width(), cropped.height());
     if (imageShadow)
       paintCaptureImageShadow(painter, imageRect, scaleX, scaleY);
@@ -1450,6 +1473,8 @@ bool annotationKindFromName(const QString &name, Annotation::Kind &kind) {
   return true;
 }
 
+} // namespace
+
 QString backgroundStyleName(BackgroundStyle style) {
   switch (style) {
   case BackgroundStyle::None:
@@ -1466,6 +1491,8 @@ QString backgroundStyleName(BackgroundStyle style) {
     return QStringLiteral("lagoon");
   case BackgroundStyle::Violet:
     return QStringLiteral("violet");
+  case BackgroundStyle::Custom:
+    return QStringLiteral("custom");
   }
   return QStringLiteral("none");
 }
@@ -1485,10 +1512,14 @@ bool backgroundStyleFromName(const QString &name, BackgroundStyle &style) {
     style = BackgroundStyle::Lagoon;
   else if (name == QStringLiteral("violet"))
     style = BackgroundStyle::Violet;
+  else if (name == QStringLiteral("custom"))
+    style = BackgroundStyle::Custom;
   else
     return false;
   return true;
 }
+
+namespace {
 
 QString textFontStyleName(TextFont textFont) {
   switch (textFont) {
