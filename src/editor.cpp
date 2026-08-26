@@ -798,7 +798,7 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
     windowMode_ = true;
     hoveredWindow_ = windowAt(cursor_);
     setStatus(QStringLiteral("Window mode · click or Super+Arrows then Enter · "
-                             "Space selects a scrolling region"));
+                             "Space returns to area"));
   } else if (mode == CaptureMode::Scroll) {
     scrollMode_ = true;
     setStatus(QStringLiteral(
@@ -2650,7 +2650,7 @@ void CaptureEditor::handleEscape() {
     selection_ = {};
     setStatus(windowMode_
                   ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                   "Enter · Space selects a scrolling region")
+                                   "Enter · Space returns to area")
                   : QStringLiteral(
                         "Drag to select an area · Space selects a window"));
     updatePointerCursor();
@@ -3348,8 +3348,8 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       return;
     }
     if (event->key() == Qt::Key_Space) {
-      // Space walks Region → Window → Scroll → Region. Fullscreen captures
-      // on the spot, so it is skipped.
+      // Space walks Region ↔ Window. Fullscreen captures on the spot, and
+      // Scroll drops the hotkey still, so either on the way past is a trap.
       const QVector<CaptureTab> tabs = selectTabItems();
       int current = -1;
       for (int index = 0; index < tabs.size(); ++index) {
@@ -3360,7 +3360,7 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
       }
       for (int step = 1; step <= tabs.size(); ++step) {
         const SelectTab next = tabs.at((current + step) % tabs.size()).kind;
-        if (next != SelectTab::Fullscreen) {
+        if (next != SelectTab::Fullscreen && next != SelectTab::Scroll) {
           activateSelectTab(next);
           break;
         }
@@ -4895,7 +4895,6 @@ void CaptureEditor::releaseFrozenCapture() {
   capturePending_ = false;
   captureForSelection_ = false;
   pendingEditStatus_.clear();
-  backdrop_ = {};
   dimmedBackdrop_ = {};
   backdropSize_ = {};
   backdropRatio_ = 0.0;
@@ -5111,7 +5110,7 @@ void CaptureEditor::returnToSelect(bool windowMode) {
   scheduleSnapshot();
   setStatus(windowMode_
                 ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                 "Enter · Space selects a scrolling region")
+                                 "Enter · Space returns to area")
                 : QStringLiteral(
                       "Drag to select an area · Space selects a window"));
   updatePointerCursor();
@@ -5149,7 +5148,7 @@ void CaptureEditor::setWindowMode(bool enabled) {
   hoveredWindow_ = windowMode_ ? windowAt(cursor_) : -1;
   setStatus(windowMode_
                 ? QStringLiteral("Window mode · click or Super+Arrows then "
-                                 "Enter · Space selects a scrolling region")
+                                 "Enter · Space returns to area")
                 : QStringLiteral(
                       "Drag to select an area · Space selects a window"));
   updatePointerCursor();
