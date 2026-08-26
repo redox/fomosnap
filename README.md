@@ -418,7 +418,7 @@ without reaching for the pointer.
 | Input | Action |
 |---|---|
 | Drag | Select a region, with its native pixel size shown at the pointer |
-| `Space` | Step through the capture-kind tabs (Region, Window, Scrolling Region) |
+| `Space` | Toggle Region and Window (Scrolling Region is `S` or the tab) |
 | `S` | Toggle scrolling-region mode |
 | `R` | Restore the last region drawn this session (same monitor) |
 | `Cmd+Arrow` | Move among windows in window mode |
