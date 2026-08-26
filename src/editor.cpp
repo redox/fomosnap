@@ -583,6 +583,8 @@ QString backgroundName(BackgroundStyle style) {
     return QStringLiteral("Lagoon");
   case BackgroundStyle::Violet:
     return QStringLiteral("Violet");
+  case BackgroundStyle::Custom:
+    return QStringLiteral("Custom");
   }
   return {};
 }
@@ -643,11 +645,28 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   paletteConfig_ = loadPaletteConfig(defaultConfigPath());
   startupTimingMark("palette config loaded");
   customColor_ = paletteConfig_.custom;
+  backgroundConfig_ = loadBackgroundConfig(defaultConfigPath());
+  if (!backgroundConfig_.imagePath.isEmpty())
+    customBackdrop_.load(backgroundConfig_.imagePath);
   if (!log.ops.isEmpty()) {
     ops_ = std::move(log.ops);
     opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
     nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
     nextMarker_ = std::max(log.nextMarker, 1);
+  } else {
+    // A genuinely fresh capture (no restored history): seed the configured
+    // default backdrop as the first undoable operation, same as pressing B
+    // once, so undo/redo and replay need no special case for it.
+    BackgroundStyle defaultStyle = backgroundConfig_.defaultStyle;
+    if (defaultStyle == BackgroundStyle::Custom && customBackdrop_.isNull())
+      defaultStyle = BackgroundStyle::None;
+    if (defaultStyle != BackgroundStyle::None) {
+      Operation op;
+      op.type = Operation::Type::Background;
+      op.background = defaultStyle;
+      ops_.push_back(std::move(op));
+      opIndex_ = ops_.size();
+    }
   }
   setWindowTitle(QStringLiteral("FOMOsnap"));
   setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
@@ -2608,6 +2627,10 @@ void CaptureEditor::cycleBackground() {
     next = BackgroundStyle::Violet;
     break;
   case BackgroundStyle::Violet:
+    next = customBackdrop_.isNull() ? BackgroundStyle::Slate
+                                    : BackgroundStyle::Custom;
+    break;
+  case BackgroundStyle::Custom:
     next = BackgroundStyle::Slate;
     break;
   }
@@ -2819,7 +2842,7 @@ void CaptureEditor::scheduleSnapshot() {
 
 QImage CaptureEditor::renderCurrentOutput() const {
   return renderCapture(capture_, selection_, annotations_, backgroundStyle_,
-                       imageShadow_, canvasBoundaryMode_);
+                       imageShadow_, canvasBoundaryMode_, customBackdrop_);
 }
 
 void CaptureEditor::startSnapshotRender() {
@@ -2890,13 +2913,14 @@ void CaptureEditor::pinSnapshot() {
   const BackgroundStyle background = backgroundStyle_;
   const bool imageShadow = imageShadow_;
   const CanvasBoundaryMode canvasBoundary = canvasBoundaryMode_;
+  const QImage backdrop = customBackdrop_;
   pinWatcher_.setFuture(QtConcurrent::run(
       [captureCopy, annotations, selection, background, imageShadow,
-       canvasBoundary, path] {
+       canvasBoundary, backdrop, path] {
         PinResult result;
         const QImage image =
             renderCapture(captureCopy, selection, annotations, background,
-                          imageShadow, canvasBoundary);
+                          imageShadow, canvasBoundary, backdrop);
         if (image.isNull() ||
             !savePinnedSnapshot(image, path, selection.size().toSize(),
                                 result.error)) {
@@ -3403,17 +3427,18 @@ void CaptureEditor::finish(OutputMode mode) {
   const BackgroundStyle background = backgroundStyle_;
   const bool imageShadow = imageShadow_;
   const CanvasBoundaryMode canvasBoundary = canvasBoundaryMode_;
+  const QImage backdrop = customBackdrop_;
   const QString appSlug =
       appFilenameSlug(dominantAppClass(capture_.windows, selection_));
   finishWatcher_.setFuture(QtConcurrent::run([captureCopy, selection,
                                               annotations, background,
                                               imageShadow, canvasBoundary,
-                                              appSlug, mode]() {
+                                              backdrop, appSlug, mode]() {
     FinishResult result;
     result.mode = mode;
     const QImage image = renderCapture(captureCopy, selection, annotations,
                                        background, imageShadow,
-                                       canvasBoundary);
+                                       canvasBoundary, backdrop);
     if (!image.isNull())
       result.thumbnail = image.scaled(kRecentThumbEdge, kRecentThumbEdge,
                                       Qt::KeepAspectRatio,
@@ -5946,19 +5971,21 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   const QRectF sourceImage = sourceFrameWidgetRect();
   const bool grown = canvasGrown();
   const BackgroundStyle background = effectiveBackgroundStyle();
-  const bool hasBackground = background != BackgroundStyle::None &&
-                             background != BackgroundStyle::Off;
+  const bool hasBackground =
+      background != BackgroundStyle::None &&
+      background != BackgroundStyle::Off &&
+      (background != BackgroundStyle::Custom || !customBackdrop_.isNull());
   const bool framedBackground =
       hasBackground && canvasBoundaryMode_ == CanvasBoundaryMode::Framed;
   if (grown) {
     // Extension is the canvas itself, while the source remains the image card
     // floating above it. Never shadow the expanded canvas edge.
-    paintCaptureBackground(painter, image, background);
+    paintCaptureBackground(painter, image, background, customBackdrop_);
     if (imageShadow_ && hasBackground)
       paintCaptureImageShadow(painter, sourceImage);
   } else if (framedBackground) {
     const QRectF backing = image.adjusted(-28, -28, 28, 28);
-    paintCaptureBackground(painter, backing, background);
+    paintCaptureBackground(painter, backing, background, customBackdrop_);
     if (imageShadow_)
       paintCaptureImageShadow(painter, image);
   }
