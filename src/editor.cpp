@@ -3336,21 +3336,9 @@ void CaptureEditor::keyPressEvent(QKeyEvent *event) {
     if (event->key() == Qt::Key_Space) {
       // Space steps Region <-> Window. Fullscreen captures on the spot, and
       // Scroll drops the hotkey still, so either on the way past is a trap.
-      const QVector<CaptureTab> tabs = selectTabItems();
-      int current = -1;
-      for (int index = 0; index < tabs.size(); ++index) {
-        if (tabs.at(index).kind == selectKind()) {
-          current = index;
-          break;
-        }
-      }
-      for (int step = 1; step <= tabs.size(); ++step) {
-        const SelectTab next = tabs.at((current + step) % tabs.size()).kind;
-        if (next != SelectTab::Fullscreen && next != SelectTab::Scroll) {
-          activateSelectTab(next);
-          break;
-        }
-      }
+      // Leave Scroll for Window rather than walking the strip: Scroll sits
+      // between Window and Fullscreen, and skipping both would land on Region.
+      activateSelectTab(windowMode_ ? SelectTab::Region : SelectTab::Window);
       return;
     }
     QWidget::keyPressEvent(event);
@@ -4881,7 +4869,6 @@ void CaptureEditor::releaseFrozenCapture() {
   capturePending_ = false;
   captureForSelection_ = false;
   pendingEditStatus_.clear();
-  backdrop_ = {};
   dimmedBackdrop_ = {};
   backdropSize_ = {};
   backdropRatio_ = 0.0;

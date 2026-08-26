@@ -1,11 +1,11 @@
 # Threading: the main thread never blocks
 
-Omasnap is a layer-shell overlay. The instant it stops painting — even for
+FOMOsnap is a full-screen overlay. The instant it stops painting — even for
 one dropped frame — it looks broken, because there is nothing else on
 screen to explain the freeze. So the rule is absolute: **the UI thread does
 capture, paint, and input handling, and nothing else.** Anything that can
-take more than a frame (disk I/O for a full-resolution image, spawning a
-process, PNG encoding, network of any kind) runs off it.
+take more than a frame (disk I/O for a full-resolution image, PNG encoding,
+Vision OCR, ScreenCaptureKit round trips that wait on a frame) runs off it.
 
 ## The pattern
 
@@ -27,27 +27,26 @@ reading its corresponding worker:
 | Watcher | Worker does |
 |---|---|
 | `captureWatcher_` | Reads window/monitor pixels via `captureMonitorPixels` |
-| `ocrWatcher_` | Renders the OCR crop and runs `tesseract` |
-| `finishWatcher_` | Renders the export, encodes PNG, does the clipboard round trip, moves the file |
+| `ocrWatcher_` | Renders the OCR crop and runs Vision |
+| `finishWatcher_` | Renders the export, encodes PNG, writes the clipboard, moves the file |
 | `snapshotWatcher_` | Writes the crash-recovery working snapshot + operation log |
-| `pinWatcher_` | Renders the image for a pinned layer surface |
+| `pinWatcher_` | Renders the image for a pinned window |
 | `recentsWatcher_` | Lists and decodes thumbnails for the recents shelf |
 
 `src/scroll-capture.cpp` follows the same rule with a plain `QFuture<void>`:
 the capture loop (grab → crop → classify → accumulate) runs on a worker
 thread so the overlay keeps painting the live page and the mode pills while
-frames come in, however slow the compositor's damage-driven capture is.
+frames come in.
 
 ## What this buys, concretely
 
-- **OCR**: whole-image or drag-region text recognition spawns `tesseract`
-  and renders a full-resolution crop, both off the UI thread, with a
+- **OCR**: whole-image or drag-region text recognition runs Vision and
+  renders a full-resolution crop, both off the UI thread, with a
   scanning animation over the region so the wait reads as progress rather
   than a hang.
 - **Export**: a stitched scroll capture can be 25,000 pixels tall. PNG
-  encoding that image, plus the `wl-copy`/`wl-paste` verification round
-  trip, is seconds of work — all in `finishWatcher_`'s worker. See
-  `CaptureEditor::finish()`.
+  encoding that image is seconds of work — all in `finishWatcher_`'s
+  worker. See `CaptureEditor::finish()`.
 - **Scroll capture**: reading the screen back after every wheel tick, at
   whatever cadence the page's animation settles at, never stalls painting
   the overlay's own chrome.
@@ -82,21 +81,16 @@ purpose every time, since nothing enforces it automatically.
 
 ## A known violation, not yet fixed
 
-`spawnScrollInjector()` (`src/scroll-inject.cpp`) is called synchronously
-from the UI thread when auto-scroll starts or Continues
+`spawnScrollInjector()` (`src/mac/mac-scroll-inject.mm`) is called
+synchronously from the UI thread when auto-scroll starts or Continues
 (`ScrollCapturePanel::startCapture`/`continueCapture` in
-`src/scroll-capture.cpp`), and it deliberately probes the injection
-backends before returning — including `hyprctl getoption
-input:natural_scroll`, a subprocess spawn with up to a 2-second
-`waitForFinished`. That's a real, if brief and infrequent (once per
-auto-scroll start, not per frame), block on the UI thread. It hasn't been
-moved to a worker because the auto-scroll injector is the most delicate,
-most recently hardened part of the codebase and depends on live
-Hyprland/Wayland state that the offline smoke suite cannot exercise —
-changing its threading needs a live re-verification pass, not just a
-green `make check`. Fix it the same way as the two cases above
-(`QtConcurrent::run` wrapping the whole call, a small watcher applying the
-result) when you can test it live.
+`src/scroll-capture.cpp`). On macOS that call only checks Accessibility
+permission and detaches a thread — it does not spawn `hyprctl` — but it
+still returns only after that check. It hasn't been moved to a worker
+because the auto-scroll injector is delicate and needs a live
+re-verification pass, not just a green `make check`. Fix it the same way
+as the two cases above (`QtConcurrent::run` wrapping the whole call, a
+small watcher applying the result) when you can test it live.
 
 ## Adding new work
 
@@ -111,4 +105,4 @@ earlier in the same call.
 
 See also [editing-model.md](editing-model.md) for what state a background
 render is allowed to read, and [dependencies.md](dependencies.md) for the
-processes (`tesseract`, `wl-copy`/`wl-paste`, `hyprctl`) these workers spawn.
+frameworks those workers call.

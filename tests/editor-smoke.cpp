@@ -323,8 +323,8 @@ bool runMeasurementReadoutCheck(QString &error) {
   QApplication::processEvents();
   if (!expect(QStringLiteral("600 × 440"), QStringLiteral("Hovered window")))
     return false;
-  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
+  // Space walks Region <-> Window and skips Scroll, which drops the still.
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
   QApplication::processEvents();
 
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(150, 120));
@@ -6722,8 +6722,7 @@ int main(int argc, char **argv) {
   if (keyboardWindowUi.pixelColor(500, 200).alpha() != 0 ||
       keyboardWindowUi.pixelColor(200, 160).alpha() == 0)
     return 8;
-  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Scroll
-  QTest::keyClick(&editor, Qt::Key_Space); // Scroll -> Region
+  QTest::keyClick(&editor, Qt::Key_Space); // Window -> Region
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
   QTest::mouseMove(&editor, QPoint(650, 470), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,

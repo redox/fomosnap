@@ -49,6 +49,7 @@ that touches the system was replaced.
 | `src/stitch.cpp/.hpp`, `src/auto-capture.cpp/.hpp` | Scroll-capture image assembly |
 | `tools/icon-generator.cpp` | Draws the app icon; `make icon` regenerates `assets/FOMOsnap.icns` |
 | `tests/*-smoke.cpp/.hpp` | Headless Qt Test coverage, including process-lifetime checks that run the real executable |
+| `docs/` | Longer writeups of threading, the editing model, platform scope, and dependencies |
 | `CMakeLists.txt` | Build definition; **the version lives here** (`project(fomosnap VERSION ...)`) |
 
 ## Permissions
