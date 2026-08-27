@@ -27,7 +27,10 @@ global hotkey were rewritten against macOS frameworks.
 - Window capture is a crop of the display frame. Overlapping windows stay
   visible; there is no second clean-window recapture.
 - Select/move/resize layers, mouse-wheel scaling, and eight external recropping handles.
-- Draw, type, resize, or carry a layer past the screenshot edge to grow the canvas.
+- Start arrows, shapes, strokes, markers, spotlights, or text in the unused
+  fullscreen workspace around a screenshot, or resize and carry an existing
+  layer past its edge, to grow the canvas. Source-based tools (redact, cut,
+  OCR, and eyedropper) stay on the screenshot.
   Framed growth is the default; `G` cycles to tight Overflow growth (only the
   sides needed by annotations, with no frame), then Image (the original canvas
   size, clipping every outside annotation). `Shift+G` cycles backward without
