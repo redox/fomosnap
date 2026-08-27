@@ -3226,8 +3226,9 @@ bool runStuckModifierSmoke(QApplication &application, QString &error) {
   QTest::mouseMove(&editor, QPoint(700, 500), 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
-                    editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")));
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")));
   application.processEvents();
 
   // A shallow drag, with the stale Shift the compositor still reports. It must
@@ -3403,10 +3404,12 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     application.processEvents();
   };
 
-  // A rectangle at annotation (400,195)-(550,345); the widget offset is
-  // (100,117). Drag it 100 px right so its right side leaves the canvas.
+  // A rectangle at annotation (400,195)-(550,345). Drag it 100 px right so
+  // its right side leaves the canvas. Map through live editor geometry: the
+  // toolbar's grouping changes its fit scale on this 800px-wide fixture.
   QTest::keyClick(&editor, Qt::Key_R);
-  drag(QPoint(500, 312), QPoint(650, 462));
+  drag(editor.toScreenPointForTest(QPointF(400, 195)).toPoint(),
+       editor.toScreenPointForTest(QPointF(550, 345)).toPoint());
   Annotation rectangle;
   rectangle.kind = Annotation::Kind::Rectangle;
   rectangle.start = {400, 195};
@@ -3420,7 +3423,8 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   QTest::keyClick(&editor, Qt::Key_V);
   // Press the top edge, clear of the corner and mid-side handles (eight on
   // a box), so this is a move.
-  drag(QPoint(540, 312), QPoint(640, 312));
+  drag(editor.toScreenPointForTest(QPointF(440, 195)).toPoint(),
+       editor.toScreenPointForTest(QPointF(540, 195)).toPoint());
   Annotation shifted = rectangle;
   shifted.start.rx() += 100;
   shifted.end.rx() += 100;
@@ -3429,9 +3433,10 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Its bottom-right handle now sits outside the canvas (widget (750,462));
-  // dragging it back in resizes the layer.
-  drag(QPoint(750, 462), QPoint(650, 412));
+  // Its bottom-right handle now sits outside the canvas; dragging it back in
+  // resizes the layer.
+  drag(editor.toScreenPointForTest(QPointF(650, 345)).toPoint(),
+       editor.toScreenPointForTest(QPointF(550, 295)).toPoint());
   Annotation resized = shifted;
   resized.end = {550, 295};
   if (!snapshotMatches(expected({resized}))) {
@@ -3446,9 +3451,10 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
     return false;
   }
 
-  // Its right edge is outside the canvas too (widget x 750); grab off the
-  // mid-side handle so this is a move, not a one-axis resize.
-  drag(QPoint(750, 352), QPoint(650, 352));
+  // Its right edge is outside the canvas too; grab off the mid-side handle so
+  // this is a move, not a one-axis resize.
+  drag(editor.toScreenPointForTest(QPointF(650, 235)).toPoint(),
+       editor.toScreenPointForTest(QPointF(550, 235)).toPoint());
   if (!snapshotMatches(expected({rectangle}))) {
     error = QStringLiteral(
         "Grabbing a selected layer outside the canvas did not move it");
@@ -3458,7 +3464,10 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
   // Outside the canvas, anything but the selected layer stays inert: a
   // click on the surround neither deselects nor changes anything, so
   // Delete still removes the layer.
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(760, 162));
+  const QRectF imageRect = editor.editImageRectForTest();
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      QPoint(qRound(imageRect.right() + 50), qRound(imageRect.top() + 45)));
   application.processEvents();
   if (!snapshotMatches(expected({rectangle}))) {
     error = QStringLiteral("A click outside the canvas changed the capture");
@@ -3571,30 +3580,34 @@ bool runSubmenuSelectionTriangleSmoke(QApplication &application, QString &error)
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
   application.processEvents();
 
-  const QPoint palette =
-      editor.toolbarButtonCenterForTest(QStringLiteral("palette"));
-  QTest::mouseMove(&editor, palette, 10);
+  const QRectF paletteButton =
+      editor.toolbarButtonRectForTest(QStringLiteral("palette"));
+  QTest::mouseMove(&editor, paletteButton.center().toPoint(), 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Hovering the palette button did not open its submenu");
     return false;
   }
 
-  QTest::mouseMove(&editor, palette + QPoint(-18, 10), 10);
+  const QRectF palette = editor.colorPaletteRectForTest();
+  const QPointF through = (paletteButton.center() + palette.center()) / 2.0;
+  QTest::mouseMove(&editor, through.toPoint(), 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Diagonal movement inside the submenu triangle closed the palette");
     return false;
   }
 
-  QTest::mouseMove(&editor, palette + QPoint(-85, 35), 10);
+  QTest::mouseMove(&editor, palette.center().toPoint(), 10);
   application.processEvents();
   if (!editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Moving from the submenu triangle into the palette closed it");
     return false;
   }
 
-  QTest::mouseMove(&editor, QPoint(180, palette.y()), 10);
+  QTest::mouseMove(
+      &editor,
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")), 10);
   application.processEvents();
   if (editor.colorPaletteOpenForTest()) {
     error = QStringLiteral("Movement away from the submenu triangle kept the palette open");
@@ -7117,12 +7130,14 @@ int main(int argc, char **argv) {
   const QImage beforeTextSnapshot = flushedSnapshot(editor, snapshotPath);
   QTest::keyClick(&editor, Qt::Key_T);
   // Text size options appear when the text button is hovered.
-  QTest::mouseMove(&editor,
-                   editor.toolbarButtonCenterForTest(QStringLiteral("tool-text")),
-                   10);
+  QTest::mouseMove(
+      &editor,
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-text")), 10);
   application.processEvents();
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
-                    editor.textSizePanelRectForTest().center().toPoint());
+  const QRectF textSizes = editor.textSizePanelRectForTest();
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      QPoint(qRound(textSizes.left() + 17), qRound(textSizes.center().y())));
   QWheelEvent textSizeWheel(QPointF(360, 320), QPointF(360, 320), {}, {0, -120},
                             Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
                             false);
@@ -7195,21 +7210,24 @@ int main(int argc, char **argv) {
   application.processEvents();
   if (flushedSnapshot(editor, snapshotPath) == beforeBackdropSnapshot)
     return 55;
-  // Palette toolbar button after the grouped shape controls.
-  QTest::mouseMove(&editor,
-                   editor.toolbarButtonCenterForTest(QStringLiteral("palette")),
-                   20);
+  // Palette toolbar button in the Style group.
+  QTest::mouseMove(
+      &editor,
+      editor.toolbarButtonCenterForTest(QStringLiteral("palette")), 20);
   application.processEvents();
   if (!editor.grab().save(outputRoot + QStringLiteral("-palette.png"), "PNG"))
     return 14;
   // Custom color control in the open palette strip.
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      editor.toolbarButtonCenterForTest(QStringLiteral("custom-color")));
+  const QRectF customColor = editor.customColorPanelRectForTest();
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
-                    editor.toolbarButtonCenterForTest(QStringLiteral("custom-color")));
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(320, 200));
+                    customColor.center().toPoint());
   // Freehand toolbar button.
-  QTest::mouseMove(&editor,
-                   editor.toolbarButtonCenterForTest(QStringLiteral("tool-freehand")),
-                   20);
+  QTest::mouseMove(
+      &editor,
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-freehand")), 20);
   application.processEvents();
   if (editor.cursor().shape() != Qt::PointingHandCursor)
     return 12;

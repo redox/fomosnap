@@ -73,17 +73,18 @@ public:
 namespace {
 constexpr std::array<qreal, 3> kTextSizes{2.0, 5.0, 9.0};
 constexpr std::array<const char *, 3> kTextSizeNames{"S", "M", "L"};
-constexpr qreal kToolbarWidth = 870;
+constexpr qreal kToolbarWidth = 840;
 // Toolbar row to the image when the capture sits lower than the tab strip.
 constexpr qreal kToolbarImageGap = 46.0;
 // Tight band reserved above a tall image so it cannot slide under the row.
 constexpr qreal kImageChromeGap = 18.0;
 // Tab strip's bottom edge to the toolbar when the image sits against it.
 constexpr qreal kTabToolbarGap = 8.0;
-/// Extra spacing (beyond the normal button gap) between toolbar groups
-/// (history / style / tools / actions), so the row reads as clusters rather
-/// than one flat strip. kToolbarWidth is 840 (the flat button/gap sum) plus
-/// three of these.
+/// Extra spacing between toolbar groups (history / style / tools / actions),
+/// so the row reads as clusters rather than one flat strip. Ordinary gaps are
+/// tightened from 4px to 2.5px; across the 20 gaps that exactly pays for these
+/// three 10px additions, keeping the existing 840px toolbar envelope and,
+/// crucially, the canvas fit geometry derived from its scale.
 constexpr qreal kToolbarGroupGap = 10;
 constexpr qreal kMinimumRedactionExtent = 5.0;
 constexpr int kBackdropDim = 143;
@@ -1636,14 +1637,7 @@ void CaptureEditor::endNudgeRun() {
 }
 
 QRectF CaptureEditor::colorPaletteRect() const {
-  const qreal scale = toolbarScale(width());
-  const qreal toolbarWidth = kToolbarWidth * scale;
-  const qreal buttonHeight = 36 * scale;
-  const qreal toolbarX = (width() - toolbarWidth) / 2.0;
-  const qreal toolbarY =
-      toolbarTop();
-  const QRectF anchor(toolbarX + 440 * scale, toolbarY, 36 * scale,
-                      buttonHeight);
+  const QRectF anchor = toolbarButtonRect(QStringLiteral("palette"));
   const qreal paletteWidth =
       8.0 + (static_cast<qreal>(paletteConfig_.palette.size()) + 2.0) * 28.0;
   const qreal x = std::clamp(anchor.center().x() - paletteWidth / 2.0, 8.0,
@@ -1662,25 +1656,14 @@ QRectF CaptureEditor::customColorPanelRect() const {
 }
 
 QRectF CaptureEditor::shapeMenuRect() const {
-  const qreal scale = toolbarScale(width());
-  const qreal toolbarX = (width() - kToolbarWidth * scale) / 2.0;
-  const qreal buttonHeight = 36 * scale;
-  const qreal toolbarY =
-      toolbarTop();
-  const QRectF anchor(toolbarX + 240 * scale, toolbarY, buttonHeight,
-                      buttonHeight);
+  QRectF anchor = toolbarButtonRect(QStringLiteral("tool-rectangle"));
+  if (anchor.isEmpty())
+    anchor = toolbarButtonRect(QStringLiteral("tool-ellipse"));
   return {anchor.center().x() - 58, anchor.bottom() + 4, 116, 36};
 }
 
 QRectF CaptureEditor::textSizePanelRect() const {
-  const qreal scale = toolbarScale(width());
-  const qreal toolbarWidth = kToolbarWidth * scale;
-  const qreal buttonHeight = 36 * scale;
-  const qreal toolbarX = (width() - toolbarWidth) / 2.0;
-  const qreal toolbarY =
-      toolbarTop();
-  const QRectF anchor(toolbarX + 400 * scale, toolbarY, 36 * scale,
-                      buttonHeight);
+  const QRectF anchor = toolbarButtonRect(QStringLiteral("tool-text"));
   return {anchor.center().x() - 51, anchor.bottom() + 6, 102, 34};
 }
 
@@ -2038,11 +2021,12 @@ int CaptureEditor::windowInDirection(int current, int key) const {
 }
 
 QVector<CaptureEditor::ToolbarButton>
-CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers) const {
+CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers,
+                              bool includeSubmenus) const {
   QVector<ToolbarButton> buttons;
   const qreal scale = toolbarScale(width());
   const qreal height = 36 * scale;
-  const qreal gap = 4 * scale;
+  const qreal gap = 2.5 * scale;
   const qreal groupGap = kToolbarGroupGap * scale;
   const qreal total = kToolbarWidth * scale;
   qreal x = (width() - total) / 2.0;
@@ -2129,7 +2113,7 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers) const {
   add(36, QStringLiteral("save"), {}, QStringLiteral("Save only · Cmd+S"));
   add(36, QStringLiteral("close"), {}, QStringLiteral("Close · Esc twice"));
 
-  if (shapeMenuOpen_) {
+  if (includeSubmenus && shapeMenuOpen_) {
     const QRectF menu = shapeMenuRect();
     buttons.push_back({{menu.left() + 4, menu.top() + 4, 32, 28},
                        QStringLiteral("shape-rectangle"), {},
@@ -2142,7 +2126,7 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers) const {
                        fillShapes_ ? QStringLiteral("filled") : QString(),
                        QStringLiteral("Toggle filled or outlined shapes"), {}});
   }
-  if (colorPaletteOpen_) {
+  if (includeSubmenus && colorPaletteOpen_) {
     const QRectF palette = colorPaletteRect();
     const int presetCount = static_cast<int>(paletteConfig_.palette.size());
     for (int index = 0; index < presetCount; ++index) {
@@ -2163,6 +2147,14 @@ CaptureEditor::toolbarButtons(QVector<qreal> *groupDividers) const {
                        QStringLiteral("Sample from image · I"), {}});
   }
   return buttons;
+}
+
+QRectF CaptureEditor::toolbarButtonRect(const QString &action) const {
+  for (const ToolbarButton &button : toolbarButtons(nullptr, false)) {
+    if (button.action == action)
+      return button.rect;
+  }
+  return {};
 }
 
 void CaptureEditor::setStatus(QString status) {
