@@ -1066,7 +1066,7 @@ QRectF CaptureEditor::annotationBounds(const Annotation &annotation) const {
             annotation.start.y() - diameter / 2.0, diameter, diameter};
   }
   if (annotation.kind == Annotation::Kind::Text)
-    return annotationTextBounds(annotation, selection_.width());
+    return annotationTextBounds(annotation);
   if (isStrokeKind(annotation.kind)) {
     if (annotation.points.isEmpty())
       return {};
@@ -1113,18 +1113,8 @@ CaptureEditor::annotationHandles(const Annotation &annotation) const {
   const QRectF bounds = annotationBounds(annotation);
   // A text's handle is its wrap width, not its size: one handle, on the edge
   // the wrapping actually moves.
-  if (annotation.kind == Annotation::Kind::Text) {
-    // Text moved or loaded past the canvas edge would put this handle out of
-    // reach, maybe off the screen itself; pull it back inside every edge so
-    // the wrap can always be dragged back in. Multiline text can overrun the
-    // bottom even when its width is already inside the right edge.
-    QPointF handle = bounds.bottomRight();
-    if (selection_.width() > 0)
-      handle.setX(std::clamp(handle.x(), 4.0, selection_.width() - 4.0));
-    if (selection_.height() > 0)
-      handle.setY(std::clamp(handle.y(), 4.0, selection_.height() - 4.0));
-    return {{handle, Interaction::ResizeEnd}};
-  }
+  if (annotation.kind == Annotation::Kind::Text)
+    return {{bounds.bottomRight(), Interaction::ResizeEnd}};
   // A counter is a disc: any corner sets its size, and sides would say
   // something about width and height that a disc cannot honour.
   if (annotation.kind == Annotation::Kind::Marker) {
@@ -3323,14 +3313,16 @@ void CaptureEditor::acceptText(bool keepSelected) {
     annotation.color = textColor_;
     annotation.size = textSize_;
     annotation.textFont = textEditFont_;
-    // Text that wrapped at the canvas edge freezes that shape on commit, as
+    // Text that wrapped at the current canvas edge freezes that shape on
+    // commit, as
     // tight as its widest line, so moving the layer later never reflows the
     // paragraph you just placed. The handle can still re-wrap it.
     annotation.textWidth = textEditWrapWidth_;
     if (annotation.textWidth <= 0.0) {
       const QStringList wrapped =
-          annotationTextLines(annotation, selection_.width());
-      if (wrapped.size() > 1) {
+          annotationTextLines(annotation, canvasRect_.right());
+      const qsizetype hardLineCount = annotation.text.count('\n') + 1;
+      if (wrapped.size() > hardLineCount) {
         const QFontMetricsF metrics(
             annotationTextFont(annotation.size, annotation.textFont));
         qreal widest = 0.0;
@@ -4498,14 +4490,12 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
         } else if (annotation.kind == Annotation::Kind::Text) {
           // The handle sets the wrap width, which is what its horizontal
           // cursor has always promised. Size belongs to the wheel, so the two
-          // are one gesture each rather than both scaling the layer. Other
-          // layers may grow the canvas, but this handle deliberately stops at
-          // the source edge where annotationHandles() keeps it reachable.
+          // are one gesture each rather than both scaling the layer. Its
+          // painted extent grows the canvas, so the handle remains reachable
+          // without being clamped back to the source frame.
           const QRectF originalBounds = annotationBounds(originalAnnotation_);
-          const qreal handleX =
-              std::clamp(point.x(), 0.0, selection_.width());
           annotation.textWidth = std::max<qreal>(
-              kMinimumTextWrapWidth, handleX - originalBounds.left());
+              kMinimumTextWrapWidth, point.x() - originalBounds.left());
         }
       }
       }
@@ -6596,7 +6586,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
                       defaultAnnotations);
   } else {
     for (const Annotation &annotation : defaultAnnotations)
-      paintAnnotation(painter, annotation, selection_.width());
+      paintAnnotation(painter, annotation);
   }
   painter.restore();
   if (highlighterPreview_) {
