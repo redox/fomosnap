@@ -3808,6 +3808,19 @@ bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
   const QImage imageColor = renderCapture(capture, sourceFrame, {outside},
                                           BackgroundStyle::Aurora, true,
                                           CanvasBoundaryMode::Image);
+  QImage customBackdrop(20, 20, QImage::Format_ARGB32_Premultiplied);
+  const QColor customGreen(QStringLiteral("#18a558"));
+  customBackdrop.fill(customGreen);
+  const QImage framedCustom =
+      renderCapture(capture, sourceFrame, {outside}, BackgroundStyle::Custom,
+                    true, CanvasBoundaryMode::Framed, customBackdrop);
+  const QImage overflowCustom =
+      renderCapture(capture, sourceFrame, {outside}, BackgroundStyle::Custom,
+                    true, CanvasBoundaryMode::Overflow, customBackdrop);
+  const QImage imageCustom =
+      renderCapture(capture, sourceFrame, {outside}, BackgroundStyle::Custom,
+                    true, CanvasBoundaryMode::Image, customBackdrop);
+  BackgroundStyle parsedCustom = BackgroundStyle::None;
   if (framedOutput.size() != framedCanvas.size().toSize() ||
       overflowOutput.size() != overflowCanvas.size().toSize() ||
       imageOutput.size() != imageCanvas.size().toSize() ||
@@ -3819,7 +3832,16 @@ bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
       overflowOutput.pixelColor(200, 10).alpha() != 0 ||
       overflowColor.size() != overflowOutput.size() ||
       overflowColor.pixelColor(200, 10).alpha() != 255 ||
-      imageColor != imageOutput) {
+      imageColor != imageOutput ||
+      framedCustom.size() != framedOutput.size() ||
+      framedCustom.pixelColor(0, 0) != customGreen ||
+      overflowCustom.size() != overflowOutput.size() ||
+      overflowCustom.pixelColor(200, 10) != customGreen ||
+      imageCustom != imageOutput ||
+      backgroundStyleName(BackgroundStyle::Custom) !=
+          QStringLiteral("custom") ||
+      !backgroundStyleFromName(QStringLiteral("custom"), parsedCustom) ||
+      parsedCustom != BackgroundStyle::Custom) {
     error = QStringLiteral("Canvas boundary exports were not clipped in order");
     return false;
   }
@@ -4414,6 +4436,139 @@ bool runFullscreenBackdropCycleSmoke(QApplication &application,
   return true;
 }
 
+
+/** Checks that sampling a color is not a change of tool: the eyedropper
+ *  hands back whatever was in hand, and recolors the layer that was selected
+ *  rather than dropping the selection with it. */
+bool runEyedropperSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  // A patch of a color nothing else uses, to sample from.
+  QPainter painter(&capture.source);
+  painter.fillRect(QRect(560, 380, 120, 120), QColor(QStringLiteral("#12b886")));
+  painter.fillRect(QRect(560, 140, 120, 120), QColor(QStringLiteral("#f59f00")));
+  painter.end();
+  capture.previewSize = capture.source.size();
+  const QString snapshotPath = temporarySnapshotPath();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
+  application.processEvents();
+
+  // An arrow, selected, then a color sampled from the patch.
+  QTest::keyClick(&editor, Qt::Key_A);
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 200));
+  QTest::mouseMove(&editor, QPoint(360, 300), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(360, 300));
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_V);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(280, 250));
+  application.processEvents();
+  const QImage before = flushedSnapshot(editor, snapshotPath);
+  QTest::keyClick(&editor, Qt::Key_A); // back to the arrow tool
+  QTest::keyClick(&editor, Qt::Key_I); // eyedropper
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 440));
+  application.processEvents();
+  const QImage recolored = flushedSnapshot(editor, snapshotPath);
+  if (recolored == before) {
+    error = QStringLiteral("Sampling a color did not recolor the selected "
+                           "layer");
+    return false;
+  }
+  // The layer is still the selected one, so a second color lands on it too.
+  // That is the half a cleared selection would break: the recolor reads the
+  // selected index, and dropping it makes every later sample a no-op.
+  QTest::keyClick(&editor, Qt::Key_I);
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(620, 200));
+  application.processEvents();
+  const QImage twice = flushedSnapshot(editor, snapshotPath);
+  if (twice == recolored) {
+    error = QStringLiteral("Sampling a color dropped the selection");
+    return false;
+  }
+  // The tool that was in hand is still in hand: this drag draws a second
+  // arrow. With the tool dropped for the select tool it would only have
+  // marqueed, leaving the capture as it was.
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(200, 420));
+  QTest::mouseMove(&editor, QPoint(340, 470), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(340, 470));
+  application.processEvents();
+  if (flushedSnapshot(editor, snapshotPath) == twice) {
+    error = QStringLiteral("Sampling a color took the tool away");
+    return false;
+  }
+  editor.close();
+  QFile::remove(snapshotPath);
+  return true;
+}
+
+/** Diagonal submenu approaches must not dismiss an already-open popover. */
+bool runSubmenuSelectionTriangleSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {800, 600};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(800, 600, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture);
+  editor.resize(800, 600);
+  editor.show();
+  application.processEvents();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+  QTest::mouseMove(&editor, QPoint(700, 500), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(700, 500));
+  application.processEvents();
+
+  const QRectF paletteButton =
+      editor.toolbarButtonRectForTest(QStringLiteral("palette"));
+  QTest::mouseMove(&editor, paletteButton.center().toPoint(), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Hovering the palette button did not open its submenu");
+    return false;
+  }
+
+  const QRectF palette = editor.colorPaletteRectForTest();
+  const QPointF through = (paletteButton.center() + palette.center()) / 2.0;
+  QTest::mouseMove(&editor, through.toPoint(), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Diagonal movement inside the submenu triangle closed the palette");
+    return false;
+  }
+
+  QTest::mouseMove(&editor, palette.center().toPoint(), 10);
+  application.processEvents();
+  if (!editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Moving from the submenu triangle into the palette closed it");
+    return false;
+  }
+
+  QTest::mouseMove(
+      &editor,
+      editor.toolbarButtonCenterForTest(QStringLiteral("tool-arrow")), 10);
+  application.processEvents();
+  if (editor.colorPaletteOpenForTest()) {
+    error = QStringLiteral("Movement away from the submenu triangle kept the palette open");
+    return false;
+  }
+
+  editor.close();
+  return true;
+}
 
 /** Runs the interaction and rendering smoke checks. */
 bool runEllipseRenderingCheck(QString &error) {
