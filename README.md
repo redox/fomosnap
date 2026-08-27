@@ -522,7 +522,7 @@ available after the pin is closed. No font-based symbol set is required; the
 controls use the same vector icon renderer as the annotation toolbar.
 
 Canvas boundary changes affect only preview and export clipping. The complete vector
-geometry stays in the operation log, so switching back to Grow restores every off-canvas
+geometry stays in the operation log, so switching back to Overflow restores every off-canvas
 part of a layer.
 
 Creation tools return to Select after one placement without selecting the new layer. In
