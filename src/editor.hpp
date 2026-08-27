@@ -306,10 +306,20 @@ public:
   /// "tool-arrow"), or (-1,-1) if not found. Test accessor: a click position
   /// that survives the toolbar's own layout changing.
   [[nodiscard]] QPoint toolbarButtonCenterForTest(const QString &action) const {
+    const QRectF button = toolbarButtonRectForTest(action);
+    return button.isEmpty() ? QPoint(-1, -1) : button.center().toPoint();
+  }
+  [[nodiscard]] QRectF toolbarButtonRectForTest(const QString &action) const {
     for (const ToolbarButton &button : toolbarButtons())
       if (button.action == action)
-        return button.rect.center().toPoint();
-    return {-1, -1};
+        return button.rect;
+    return {};
+  }
+  [[nodiscard]] QRectF colorPaletteRectForTest() const {
+    return colorPaletteRect();
+  }
+  [[nodiscard]] QRectF customColorPanelRectForTest() const {
+    return customColorPanelRect();
   }
   [[nodiscard]] QRectF textSizePanelRectForTest() const {
     return textSizePanelRect();
@@ -403,7 +413,9 @@ private:
   /// midpoint x of each gap between groups is appended to it, in widget
   /// space, for the divider lines drawn between clusters.
   [[nodiscard]] QVector<ToolbarButton>
-  toolbarButtons(QVector<qreal> *groupDividers = nullptr) const;
+  toolbarButtons(QVector<qreal> *groupDividers = nullptr,
+                 bool includeSubmenus = true) const;
+  [[nodiscard]] QRectF toolbarButtonRect(const QString &action) const;
   [[nodiscard]] QColor annotationColor() const;
   [[nodiscard]] QLineF creationSpan(const QPointF &rawEnd) const;
   [[nodiscard]] QPointF
