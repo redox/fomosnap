@@ -17,8 +17,8 @@ struct BackgroundConfig {
 };
 
 /** Reads `[background] image` (a path, `~` expands to $HOME) and
- *  `[background] default` (a style name: none, aurora, sunset, lagoon,
- *  violet, custom) from an INI file. A missing file or key leaves defaults
+ *  `[background] default` (a style name: none, off, slate, aurora, sunset,
+ *  lagoon, violet, custom) from an INI file. A missing file or key leaves defaults
  *  untouched; an unrecognized style name is ignored. Whether `default =
  *  custom` actually takes effect depends on `image` loading successfully,
  *  which the caller checks. */

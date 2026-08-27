@@ -525,6 +525,8 @@ private:
   void paintRecents(QPainter &painter);
   void reopenRecent(int index);
   void completeReopenRecent(const ReopenResult &result);
+  void completeBackdropLoad();
+  void seedConfiguredBackground(BackgroundStyle style);
   void duplicateSelectedAnnotation();
   [[nodiscard]] EditState editState() const;
   void refreshCanvasRect();
@@ -683,6 +685,8 @@ private:
   /** Loaded from `backgroundConfig_.imagePath`; null when unset or the file
    *  failed to load, in which case `BackgroundStyle::Custom` is unavailable. */
   QImage customBackdrop_;
+  bool configuredCustomDefaultPending_ = false;
+  std::optional<QString> pendingSelectedCapture_;
   bool busy_ = false;
   bool colorPaletteOpen_ = false;
   bool customColorPickerOpen_ = false;
@@ -809,6 +813,7 @@ private:
   QFutureWatcher<OcrResult> ocrWatcher_;
   QFutureWatcher<FinishResult> finishWatcher_;
   QFutureWatcher<ReopenResult> reopenWatcher_;
+  QFutureWatcher<QImage> backdropWatcher_;
   bool reopenPending_ = false;
   /// The region being read (annotation coordinates). While tesseract runs a
   /// scan band sweeps it; once done the recognized text sits over it for a

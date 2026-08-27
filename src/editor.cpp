@@ -646,26 +646,31 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   startupTimingMark("palette config loaded");
   customColor_ = paletteConfig_.custom;
   backgroundConfig_ = loadBackgroundConfig(defaultConfigPath());
-  if (!backgroundConfig_.imagePath.isEmpty())
-    customBackdrop_.load(backgroundConfig_.imagePath);
+  connect(&backdropWatcher_, &QFutureWatcher<QImage>::finished, this,
+          [this] { completeBackdropLoad(); });
+  if (!backgroundConfig_.imagePath.isEmpty()) {
+    const QString backdropPath = backgroundConfig_.imagePath;
+    backdropWatcher_.setFuture(QtConcurrent::run([backdropPath] {
+      QImage image;
+      image.load(backdropPath);
+      return image;
+    }));
+  }
   if (!log.ops.isEmpty()) {
     ops_ = std::move(log.ops);
     opIndex_ = std::clamp(log.index, 0, static_cast<int>(ops_.size()));
     nextAnnotationId_ = std::max<quint64>(log.nextId, 1);
     nextMarker_ = std::max(log.nextMarker, 1);
   } else {
-    // A genuinely fresh capture (no restored history): seed the configured
-    // default backdrop as the first undoable operation, same as pressing B
-    // once, so undo/redo and replay need no special case for it.
-    BackgroundStyle defaultStyle = backgroundConfig_.defaultStyle;
-    if (defaultStyle == BackgroundStyle::Custom && customBackdrop_.isNull())
-      defaultStyle = BackgroundStyle::None;
-    if (defaultStyle != BackgroundStyle::None) {
-      Operation op;
-      op.type = Operation::Type::Background;
-      op.background = defaultStyle;
-      ops_.push_back(std::move(op));
-      opIndex_ = ops_.size();
+    // A genuinely fresh capture seeds its configured backdrop as the first
+    // undoable operation. Arbitrary custom images load on the worker pool;
+    // built-in styles are available immediately.
+    const BackgroundStyle defaultStyle = backgroundConfig_.defaultStyle;
+    if (defaultStyle == BackgroundStyle::Custom) {
+      configuredCustomDefaultPending_ =
+          !backgroundConfig_.imagePath.isEmpty();
+    } else {
+      seedConfiguredBackground(defaultStyle);
     }
   }
   setWindowTitle(QStringLiteral("FOMOsnap"));
@@ -2646,6 +2651,35 @@ void CaptureEditor::cycleBackground() {
   commitBackground(next, nextShadow);
 }
 
+void CaptureEditor::seedConfiguredBackground(BackgroundStyle style) {
+  if (style == BackgroundStyle::None)
+    return;
+  Operation op;
+  op.type = Operation::Type::Background;
+  op.background = style;
+  ops_.insert(ops_.cbegin(), std::move(op));
+  ++opIndex_;
+  if (phase_ == Phase::Select)
+    backgroundStyle_ = style;
+  else
+    replayLog();
+}
+
+void CaptureEditor::completeBackdropLoad() {
+  customBackdrop_ = backdropWatcher_.result();
+  if (configuredCustomDefaultPending_) {
+    configuredCustomDefaultPending_ = false;
+    if (!customBackdrop_.isNull())
+      seedConfiguredBackground(BackgroundStyle::Custom);
+  }
+  update();
+  if (pendingSelectedCapture_) {
+    QString status = std::move(*pendingSelectedCapture_);
+    pendingSelectedCapture_.reset();
+    enterSelectedCapture(std::move(status));
+  }
+}
+
 void CaptureEditor::replayLog() {
   QVector<quint64> selectedIds;
   for (const int index : selectedAnnotations_) {
@@ -2963,7 +2997,11 @@ void CaptureEditor::enterEdit(QString status) {
   setStatus(std::move(status));
   updatePointerCursor();
   const QRectF full(QPointF(), capture_.previewSize);
-  if (ops_.isEmpty() && !selection_.isEmpty() && selection_ != full)
+  const bool hasCrop = std::any_of(
+      ops_.cbegin(),
+      ops_.cbegin() + std::min(opIndex_, static_cast<int>(ops_.size())),
+      [](const Operation &op) { return op.type == Operation::Type::Crop; });
+  if (!hasCrop && !selection_.isEmpty() && selection_ != full)
     commitCrop(selection_);
   else
     scheduleSnapshot();
@@ -2971,6 +3009,11 @@ void CaptureEditor::enterEdit(QString status) {
 
 void CaptureEditor::enterSelectedCapture(QString editStatus) {
   if (quickOutputMode_ != QuickOutputMode::None) {
+    if (configuredCustomDefaultPending_) {
+      pendingSelectedCapture_ = std::move(editStatus);
+      setStatus(QStringLiteral("Loading custom backdrop…"));
+      return;
+    }
     enterExport();
     return;
   }

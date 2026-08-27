@@ -385,12 +385,13 @@ palette = #ff375f, #ff9f0a, #ffd60a, #30d158, #0a84ff, #bf5af2, #000000, #ffffff
 custom = #ff375f
 
 [background]
-# An image used as a "Custom" backdrop, in addition to the four built-in
-# gradients. B (or the toolbar's backdrop button) cycles through none, the
-# four gradients, then this image, skipping it if unset or unreadable.
+# An image used as a "Custom" backdrop. B (or the toolbar button) cycles
+# through the four gradients, this image when readable, shadowed/flat window
+# gray, and Off.
 image = ~/Pictures/backdrops/desk.jpg
-# Style a freshly opened capture starts with, instead of no backdrop:
-# none, aurora, sunset, lagoon, violet, or custom. `custom` only takes
+# Style a fresh capture starts with: none, off, slate, aurora, sunset, lagoon,
+# violet, or custom. `none` still allows Framed canvas growth to add its
+# automatic window-gray mat; `off` stays transparent. `custom` only takes
 # effect once `image` above loads successfully.
 default = custom
 ```
