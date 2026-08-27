@@ -201,8 +201,7 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
     if (annotation.kind == Annotation::Kind::Redaction)
       return QRectF();
     if (annotation.kind == Annotation::Kind::Text)
-      return annotationTextBounds(annotation, sourceFrameSize.width())
-          .adjusted(-1, -1, 1, 1);
+      return annotationTextBounds(annotation).adjusted(-1, -1, 1, 1);
     if (annotation.kind == Annotation::Kind::Marker) {
       const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
       const qreal antialias =
@@ -803,7 +802,7 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
   const auto passOver = [&](bool (*belongs)(Annotation::Kind)) {
     for (const Annotation &annotation : annotations) {
       if (belongs(annotation.kind))
-        paintAnnotation(painter, annotation, logicalBounds.right());
+        paintAnnotation(painter, annotation);
     }
   };
   passOver([](Annotation::Kind kind) {

@@ -1822,8 +1822,8 @@ bool runDraftPillStaysPutCheck(QApplication &application, QString &error) {
   return true;
 }
 
-/** A text layer pushed past the canvas edge keeps a reachable wrap handle,
- *  and the handle drag stops at the canvas edge. */
+/** A text layer may grow past the source edge, where its real wrap handle
+ *  remains reachable and can be dragged farther into the expanded canvas. */
 bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   CaptureData capture;
   capture.monitor.name = QStringLiteral("TEST");
@@ -1834,17 +1834,16 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   capture.source.fill(QColor(QStringLiteral("#182030")));
   capture.previewSize = capture.source.size();
 
-  // A frozen width far past the canvas edge, straight from a stored log, is
-  // the state a move or an old capture can produce.
   const QRectF selection(100, 100, 550, 370);
   const qreal ascent = QFontMetricsF(annotationTextFont(5.0)).ascent();
   Annotation text;
   text.kind = Annotation::Kind::Text;
-  text.start = QPointF(60, 145 + ascent);
+  text.start = QPointF(500, 145 + ascent);
   text.text = QStringLiteral("wrap wrap wrap wrap wrap wrap wrap wrap wrap wrap");
   text.color = QColor(QStringLiteral("#ff375f"));
   text.size = 5;
-  text.textWidth = 900.0;
+  text.textWidth = 180.0;
+  text.textBackground = TextBackground::Plain;
   text.id = 1;
   OperationLog log;
   Operation cropOp;
@@ -1865,85 +1864,58 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   editor.show();
   application.processEvents();
 
-  // Derive the display mapping from the rendered glyphs themselves: the only
-  // red ink below the toolbar is this one line of text with known bounds.
-  const auto inkBounds = [&editor] {
-    const QImage frame = editor.grab().toImage();
-    QRect bounds;
-    for (int y = 90; y < 560; ++y)
-      for (int x = 0; x < frame.width(); ++x) {
-        const QColor color = frame.pixelColor(x, y);
-        if (color.red() > 200 && color.green() < 120)
-          bounds |= QRect(x, y, 1, 1);
-      }
-    return bounds;
-  };
-  const QRect ink = inkBounds();
-  const QFontMetricsF metrics(annotationTextFont(5.0));
-  if (ink.isNull() ||
-      ink.width() < metrics.horizontalAdvance(text.text) * 0.5) {
-    error = QStringLiteral("Overrun text did not render for the handle check");
+  const QRectF sourceFrame(QPointF(), selection.size());
+  if (editor.currentCanvasForTest().right() <= sourceFrame.right()) {
+    error = QStringLiteral("Text past the source edge did not grow the canvas");
     return false;
   }
 
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ink.center());
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      editor.annotationPointToWidgetForTest(annotationTextBounds(text).center())
+          .toPoint());
   application.processEvents();
-
-  // The layer's own corner is far off the canvas, maybe off the screen; the
-  // handle waits at the canvas edge instead. Sweep a neighborhood around
-  // where the edge must be (the ink locates the layer, the display scale is
-  // near one) until the hover cursor says resize; never finding it is
-  // exactly the bug this guards.
-  const int guessX = std::min(
-      790, ink.left() + qRound(selection.width() - 4.0 - text.start.x()));
-  const int guessY = ink.bottom() + 6;
-  QPoint handleSpot;
-  for (int gy = guessY - 24; gy <= guessY + 24 && handleSpot.isNull(); gy += 4)
-    for (int gx = guessX - 60; gx <= std::min(795, guessX + 80); gx += 4) {
-      QTest::mouseMove(&editor, QPoint(gx, gy), 20);
-      application.processEvents();
-      if (editor.cursor().shape() == Qt::SizeHorCursor) {
-        handleSpot = QPoint(gx, gy);
-        break;
-      }
-    }
-  if (handleSpot.isNull()) {
-    error = QStringLiteral("Overrun text's wrap handle was out of reach");
+  if (editor.selectedCountForTest() != 1) {
+    error = QStringLiteral("Text on the grown canvas could not be selected");
     return false;
   }
 
-  // Dragging the handle right stops at the canvas edge (drag points clamp to
-  // the selection), so the text must wrap there rather than follow the
-  // pointer out. Two ink lines say the width stopped at the edge; the frozen
-  // 900 (or anything past the full line) would keep one.
+  const QPoint handleSpot = editor
+                                .annotationPointToWidgetForTest(
+                                    annotationTextBounds(text).bottomRight())
+                                .toPoint();
+  QTest::mouseMove(&editor, handleSpot, 20);
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::SizeHorCursor) {
+    error =
+        QStringLiteral("Expanded text's real wrap handle was not reachable");
+    return false;
+  }
+
+  const int operationsBefore = editor.operationLog().size();
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handleSpot);
-  const QPoint wayRight(std::min(795, handleSpot.x() + 120), handleSpot.y());
+  const QPoint wayRight(std::min(editor.width() - 2, handleSpot.x() + 70),
+                        handleSpot.y());
   QTest::mouseMove(&editor, wayRight, 20);
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, wayRight);
   application.processEvents();
-  const QRect after = inkBounds();
-  int bands = 0;
-  bool inBand = false;
-  const QImage frame = editor.grab().toImage();
-  for (int y = after.top(); y <= after.bottom(); ++y) {
-    bool rowInk = false;
-    for (int x = after.left(); x <= after.right() && !rowInk; ++x) {
-      const QColor color = frame.pixelColor(x, y);
-      rowInk = color.red() > 200 && color.green() < 120;
-    }
-    bands += rowInk && !inBand ? 1 : 0;
-    inBand = rowInk;
-  }
-  if (bands < 2) {
-    error = QStringLiteral("Handle drag past the edge did not stop there");
+  const QVector<Operation> &operations = editor.operationLog();
+  if (operations.size() != operationsBefore + 1 ||
+      operations.constLast().type != Operation::Type::Patch ||
+      operations.constLast().annotations.size() != 1 ||
+      operations.constLast().annotations.constFirst().textWidth <=
+          text.textWidth ||
+      editor.currentCanvasForTest().right() <= sourceFrame.right()) {
+    error = QStringLiteral("Dragging the off-canvas handle did not widen text "
+                           "on the grown canvas");
     return false;
   }
   return true;
 }
 
-/** A multiline text layer whose bottom runs below the canvas keeps its wrap
- *  handle on the canvas, where it can still be dragged inward. */
+/** A multiline text layer grows the canvas downward, keeping its real
+ *  bottom-right wrap handle reachable there. */
 bool runTextVerticalOverrunHandleCheck(QApplication &application,
                                        QString &error) {
   CaptureData capture;
@@ -1984,51 +1956,30 @@ bool runTextVerticalOverrunHandleCheck(QApplication &application,
   editor.show();
   application.processEvents();
 
-  // Red text is the only saturated red below the toolbar. Its visible ink
-  // reaches the canvas bottom, while the real bottom-right corner is clipped
-  // below it, which is the state the bug report showed.
-  const QImage initial = editor.grab().toImage();
-  QRect ink;
-  for (int y = 90; y < initial.height(); ++y)
-    for (int x = 0; x < initial.width(); ++x) {
-      const QColor color = initial.pixelColor(x, y);
-      if (color.red() > 200 && color.green() < 120)
-        ink |= QRect(x, y, 1, 1);
-    }
-  if (ink.isNull()) {
-    error = QStringLiteral("Vertically overrun text did not render");
+  if (editor.currentCanvasForTest().bottom() <= selection.height()) {
+    error = QStringLiteral("Multiline text did not grow the canvas downward");
     return false;
   }
 
   QTest::keyClick(&editor, Qt::Key_V);
-  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, ink.center());
+  QTest::mouseClick(
+      &editor, Qt::LeftButton, Qt::NoModifier,
+      editor.annotationPointToWidgetForTest(annotationTextBounds(text).center())
+          .toPoint());
   application.processEvents();
   if (editor.selectedCountForTest() != 1) {
     error = QStringLiteral("Vertically overrun text could not be selected");
     return false;
   }
 
-  // The rescued handle should be near the visible text's right edge and the
-  // canvas bottom. Before the vertical clamp it remains below the canvas, so
-  // no point in this reachable neighborhood advertises a horizontal resize.
-  QPoint handleSpot;
-  for (int y = ink.bottom() - 28;
-       y <= std::min(editor.height() - 1, ink.bottom() + 12) &&
-       handleSpot.isNull();
-       y += 2) {
-    for (int x = std::max(0, ink.right() - 36);
-         x <= std::min(editor.width() - 1, ink.right() + 36); x += 2) {
-      QTest::mouseMove(&editor, QPoint(x, y), 10);
-      application.processEvents();
-      if (editor.cursor().shape() == Qt::SizeHorCursor) {
-        handleSpot = {x, y};
-        break;
-      }
-    }
-  }
-  if (handleSpot.isNull()) {
-    error = QStringLiteral(
-        "Text below the canvas did not keep a reachable wrap handle");
+  const QPoint handleSpot = editor
+                                .annotationPointToWidgetForTest(
+                                    annotationTextBounds(text).bottomRight())
+                                .toPoint();
+  QTest::mouseMove(&editor, handleSpot, 20);
+  application.processEvents();
+  if (editor.cursor().shape() != Qt::SizeHorCursor) {
+    error = QStringLiteral("Text below the source lost its real wrap handle");
     return false;
   }
 
@@ -5860,6 +5811,13 @@ bool runTextWrapRenderingCheck(QString &error) {
   text.text = QStringLiteral("the quick brown fox jumps over the lazy dog");
   if (annotationTextLines(text, 200.0).size() < 2) {
     error = QStringLiteral("Text did not wrap at the canvas edge");
+    return false;
+  }
+  const QRectF expanded =
+      captureCanvasRect(QSizeF(200, 100), {text}, CanvasBoundaryMode::Framed);
+  if (expanded.right() <= 200.0 || annotationTextLines(text).size() != 1) {
+    error = QStringLiteral(
+        "Committed zero-width text did not expand the canvas unbounded");
     return false;
   }
 
