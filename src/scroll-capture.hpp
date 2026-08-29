@@ -96,6 +96,10 @@ public:
   void release();
   /// Same inset the editor uses so the tab strip sits below a notch.
   void setSafeAreaTop(qreal inset) { safeAreaTop_ = inset; }
+  /// The frame as it stands, in logical surface pixels. Empty until one has
+  /// been drawn. The editor reads it when another tab is picked, so the
+  /// rectangle carries across instead of having to be drawn again.
+  [[nodiscard]] QRect region() const { return region_; }
 
 signals:
   /// The capture is done: `image` is the stitched result.
