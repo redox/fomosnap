@@ -8,6 +8,24 @@
 
 #include <algorithm>
 
+QFont chromeFont(int pixelSize, bool bold) {
+  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+  font.setPixelSize(pixelSize);
+  font.setBold(bold);
+  return font;
+}
+
+QFont chromeDefaultFont() {
+  return QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+}
+
+QFont chromeMonoFont(int pixelSize, bool bold) {
+  QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+  font.setPixelSize(pixelSize);
+  font.setBold(bold);
+  return font;
+}
+
 QString captureTabLabel(CaptureKind kind) {
   switch (kind) {
   case CaptureKind::Region:
@@ -150,8 +168,7 @@ void drawHotkeyLegend(QPainter &painter, const QRect &bounds,
     return;
   constexpr int columns = 2;
   const int rows = (entries.size() + columns - 1) / columns;
-  QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-  font.setPixelSize(11);
+  const QFont font = chromeFont(11);
   const QFontMetricsF metrics(font);
   constexpr qreal keyGap = 12;    // between a key and what it does
   constexpr qreal columnGap = 24; // between the two columns

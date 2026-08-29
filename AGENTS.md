@@ -51,7 +51,10 @@ change that touches the principle, not just this summary.
   Vision for OCR rather than tesseract, `UNUserNotificationCenter` for
   notifications, `NSPasteboard` through `QClipboard` for the clipboard. The UI
   stays vector-drawn with the bundled Neucha font and no icon-theme dependency.
-  See [docs/dependencies.md](docs/dependencies.md).
+  Overlay chrome uses `chromeFont()`/`chromeMonoFont()`
+  (`src/overlay-chrome.cpp`) wrapping the system UI and fixed fonts — not a
+  Qt platform theme, `QStyle`, or `palette()`. See
+  [docs/dependencies.md](docs/dependencies.md).
 - **Single binary.** Everything (capture, editor, pin, agent) runs from the one
   executable inside `FOMOsnap.app`.
 - **The platform layer is quarantined.** Only `src/mac/*.mm` may include an

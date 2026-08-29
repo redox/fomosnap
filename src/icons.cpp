@@ -1,7 +1,8 @@
 #include "icons.hpp"
 
+#include "overlay-chrome.hpp"
+
 #include <QConicalGradient>
-#include <QFontDatabase>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -54,10 +55,7 @@ void drawToolbarIcon(QPainter &painter, const QRectF &bounds,
     painter.drawEllipse(QPointF(10.5, 10.5), 2.3, 2.3);
   } else if (action == QStringLiteral("tool-marker")) {
     painter.drawEllipse(QPointF(12, 12), 8, 8);
-    QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
-    font.setPixelSize(11);
-    font.setBold(true);
-    painter.setFont(font);
+    painter.setFont(chromeFont(11, true));
     painter.drawText(QRectF(4, 4, 16, 16), Qt::AlignCenter,
                      QStringLiteral("1"));
   } else if (action == QStringLiteral("tool-rectangle")) {

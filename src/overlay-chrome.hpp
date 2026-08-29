@@ -12,7 +12,19 @@
 #include <QString>
 #include <QVector>
 
+class QFont;
 class QPainter;
+
+/// Overlay chrome text (toolbar labels, hotkey legend, tooltips): the system
+/// UI font at a pixel size, never a Qt platform theme, `QStyle`, or
+/// `palette()`.
+[[nodiscard]] QFont chromeFont(int pixelSize, bool bold = false);
+/// The system UI font at its native size. Callers that draw with a painter's
+/// default font can pin this; `main()` leaves Qt/cocoa's application font
+/// alone because that is already the system UI face.
+[[nodiscard]] QFont chromeDefaultFont();
+/// Monospace counterpart for numeric readouts: the system fixed font.
+[[nodiscard]] QFont chromeMonoFont(int pixelSize, bool bold = false);
 
 /// The kinds of capture the tab strip across the top offers, on every
 /// overlay. Region and Window are modes of the area overlay, Scroll is the

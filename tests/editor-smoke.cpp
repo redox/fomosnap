@@ -7,6 +7,7 @@
 #include "cut-mapping-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
+#include "overlay-chrome.hpp"
 #include "recent-snaps.hpp"
 #include "instance-lock-smoke.hpp"
 #include "palette-config-smoke.hpp"
@@ -589,6 +590,33 @@ void paintTextLikeBand(QImage &image, const QRectF &logicalBand, qreal scale,
                       logicalBand.height() - topInset - bottomInset);
     painter.drawRect(QRectF(stem.topLeft() * scale, stem.size() * scale));
   }
+}
+
+/** Chrome fonts wrap the system UI / fixed faces and must resolve. */
+bool runChromeFontCheck(QString &error) {
+  const QFont general = chromeFont(11, true);
+  if (general.pixelSize() != 11 || !general.bold() ||
+      QFontInfo(general).family().isEmpty()) {
+    error = QStringLiteral("chromeFont(11, true) did not resolve: %1")
+                .arg(general.toString());
+    return false;
+  }
+  const QFont appDefault = chromeDefaultFont();
+  if (QFontInfo(appDefault).family().isEmpty()) {
+    error = QStringLiteral("chromeDefaultFont() did not resolve: %1")
+                .arg(appDefault.toString());
+    return false;
+  }
+  const QFont mono = chromeMonoFont(12);
+  const QFontInfo monoInfo(mono);
+  if (mono.pixelSize() != 12 || mono.bold() || monoInfo.family().isEmpty() ||
+      !monoInfo.fixedPitch()) {
+    error = QStringLiteral("chromeMonoFont(12) resolved to %1, expected a "
+                           "fixed-pitch family")
+                .arg(monoInfo.family());
+    return false;
+  }
+  return true;
 }
 
 /** Local edge scan finds text height across themes and native image scales. */
@@ -7902,6 +7930,10 @@ int main(int argc, char **argv) {
   if (!runTextBandDetectionCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 128;
+  }
+  if (!runChromeFontCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 130;
   }
   if (!runTextAwareHighlighterEditorCheck(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
