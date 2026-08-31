@@ -23,7 +23,9 @@ class QPainter;
 /// default font can pin this; `main()` leaves Qt/cocoa's application font
 /// alone because that is already the system UI face.
 [[nodiscard]] QFont chromeDefaultFont();
-/// Monospace counterpart for numeric readouts: the system fixed font.
+/// Monospace counterpart for numeric readouts: Menlo, the macOS system
+/// fixed font. Qt's FixedFont lookup can resolve to the UI face under the
+/// offscreen QPA, so this is pinned rather than taken from the theme.
 [[nodiscard]] QFont chromeMonoFont(int pixelSize, bool bold = false);
 
 /// The kinds of capture the tab strip across the top offers, on every
