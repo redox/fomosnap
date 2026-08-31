@@ -33,6 +33,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QScreen>
@@ -642,6 +643,9 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   backgroundConfig_ = loadBackgroundConfig(defaultConfigPath());
   connect(&backdropWatcher_, &QFutureWatcher<QImage>::finished, this,
           [this] { completeBackdropLoad(); });
+  connect(&highlighterProbeWatcher_,
+          &QFutureWatcher<HighlighterProbeResult>::finished, this,
+          [this] { completeHighlighterProbe(); });
   if (!backgroundConfig_.imagePath.isEmpty()) {
     const QString backdropPath = backgroundConfig_.imagePath;
     backdropWatcher_.setFuture(QtConcurrent::run([backdropPath] {
@@ -699,6 +703,17 @@ CaptureEditor::CaptureEditor(CaptureData capture, CaptureMode mode,
   nudgePersistTimer_.setInterval(kNudgeCoalesceMs);
   connect(&nudgePersistTimer_, &QTimer::timeout, this,
           [this] { endNudgeRun(); });
+
+  // Coalesce high-polling-rate pointer samples to one small damaged region per
+  // display frame. QWidget's backing store keeps everything outside that
+  // region; a 6K overlay must not repaint all 20 million pixels for a badge.
+  pointerRepaintTimer_.setSingleShot(true);
+  pointerRepaintTimer_.setInterval(16);
+  connect(&pointerRepaintTimer_, &QTimer::timeout, this, [this] {
+    const QRegion damage = std::exchange(pendingPointerDamage_, {});
+    if (!damage.isEmpty())
+      update(damage);
+  });
 
   ocrAnimTimer_.setInterval(16);
   connect(&ocrAnimTimer_, &QTimer::timeout, this, [this] { update(); });
@@ -2086,32 +2101,67 @@ QPointF CaptureEditor::sourcePoint(const QPointF &logicalPoint) const {
   return sourceRect(QRectF(logicalPoint, QSizeF())).topLeft();
 }
 
-std::optional<CaptureEditor::HighlighterLock>
-CaptureEditor::highlighterLockAt(const QPointF &annotationPoint) const {
+void CaptureEditor::scheduleHighlighterProbe(
+    const QPointF &annotationPoint) {
+  pendingHighlighterProbePoint_ = annotationPoint;
+  if (highlighterProbeWatcher_.isRunning())
+    return;
   if (capture_.source.isNull() || capture_.previewSize.isEmpty() ||
-      !QRectF(QPointF(), selection_.size()).contains(annotationPoint))
-    return std::nullopt;
+      !QRectF(QPointF(), selection_.size()).contains(annotationPoint)) {
+    pendingHighlighterProbePoint_.reset();
+    highlighterPreview_.reset();
+    highlighterPreviewPoint_.reset();
+    return;
+  }
 
+  const QPointF probePoint = *pendingHighlighterProbePoint_;
+  pendingHighlighterProbePoint_.reset();
+  const quint64 generation = ++highlighterProbeGeneration_;
+  const QImage source = capture_.source;
   const QSizeF sourceScale(
-      capture_.source.width() /
-          static_cast<qreal>(capture_.previewSize.width()),
-      capture_.source.height() /
-          static_cast<qreal>(capture_.previewSize.height()));
-  const QPointF logicalPoint = selection_.topLeft() + annotationPoint;
-  const auto band =
-      detectTextBand(capture_.source, sourcePoint(logicalPoint), sourceScale);
-  if (!band)
-    return std::nullopt;
+      source.width() / static_cast<qreal>(capture_.previewSize.width()),
+      source.height() / static_cast<qreal>(capture_.previewSize.height()));
+  const QRectF selection = selection_;
+  const QPointF logicalPoint = selection.topLeft() + probePoint;
+  const QPointF sourceProbe = sourcePoint(logicalPoint);
+  highlighterProbeWatcher_.setFuture(QtConcurrent::run(
+      [source, sourceScale, selection, sourceProbe, probePoint, generation] {
+        HighlighterProbeResult result;
+        result.generation = generation;
+        result.annotationPoint = probePoint;
+        const auto band = detectTextBand(source, sourceProbe, sourceScale);
+        if (!band)
+          return result;
+        // Match the text-band padding used for the committed stroke.
+        constexpr qreal padPerSide = 0.05;
+        const qreal centerY =
+            band->center() / sourceScale.height() - selection.top();
+        const qreal highlightedHeight =
+            band->height() * (1.0 + 2.0 * padPerSide) /
+            sourceScale.height();
+        result.lock = HighlighterLock{
+            std::clamp(centerY, 0.0, selection.height()),
+            highlightedHeight / 3.0};
+        return result;
+      }));
+}
 
-  // Match the text-band padding used for the committed stroke. Keeping this
-  // in one helper makes the hover I-beam and mouse-down lock identical.
-  constexpr qreal padPerSide = 0.05;
-  const qreal centerY =
-      band->center() / sourceScale.height() - selection_.top();
-  const qreal highlightedHeight =
-      band->height() * (1.0 + 2.0 * padPerSide) / sourceScale.height();
-  return HighlighterLock{std::clamp(centerY, 0.0, selection_.height()),
-                         highlightedHeight / 3.0};
+void CaptureEditor::completeHighlighterProbe() {
+  const HighlighterProbeResult result = highlighterProbeWatcher_.result();
+  if (result.generation == highlighterProbeGeneration_ &&
+      phase_ == Phase::Edit && tool_ == Tool::Highlighter &&
+      highlighterMode_ == HighlighterMode::Snap && !dragging_) {
+    const QRegion oldVisual = pointerMotionRegion(cursor_);
+    highlighterPreview_ = result.lock;
+    highlighterPreviewPoint_ = result.annotationPoint;
+    const Qt::CursorShape shape = highlighterPreview_ ? Qt::BlankCursor
+                                                      : Qt::CrossCursor;
+    if (cursor().shape() != shape)
+      setCursor(shape);
+    queuePointerRepaint(oldVisual | pointerMotionRegion(cursor_));
+  }
+  if (pendingHighlighterProbePoint_)
+    scheduleHighlighterProbe(*pendingHighlighterProbePoint_);
 }
 
 QRectF CaptureEditor::highlighterPreviewRectForTest() const {
@@ -4053,12 +4103,201 @@ void CaptureEditor::leaveEvent(QEvent *event) {
   update();
 }
 
+QRegion CaptureEditor::pointerMotionRegion(const QPointF &point) const {
+  QRegion damage;
+  const QRect widgetBounds = rect();
+  const auto add = [&](const QRectF &area) {
+    if (!area.isEmpty())
+      damage |= QRegion(area.adjusted(-2, -2, 2, 2).toAlignedRect()) &
+                QRegion(widgetBounds);
+  };
+  const auto addFrame = [&](const QRectF &frame, qreal width = 5.0) {
+    if (frame.isEmpty())
+      return;
+    const QRegion outer(frame.adjusted(-width, -width, width, width)
+                            .toAlignedRect());
+    const QRegion inner(frame.adjusted(width, width, -width, -width)
+                            .toAlignedRect());
+    damage |= (outer.subtracted(inner) & QRegion(widgetBounds));
+  };
+
+  // The native-pixel badge flips around the pointer near screen edges. A
+  // generous local box is cheaper than measuring fonts in an input handler
+  // and still tiny beside a 6K surface.
+  add(QRectF(point.x() - 230, point.y() - 70, 460, 140));
+
+  for (const CaptureTab &tab : selectTabItems()) {
+    if (tab.rect.contains(point)) {
+      add(tab.rect.adjusted(-4, -4, 4, 4));
+      break;
+    }
+  }
+
+  if (phase_ == Phase::Select) {
+    if (!windowMode_ && !dragging_ && !recentsOpen_) {
+      add(QRectF(point.x() - 3, 0, 7, height()));
+      add(QRectF(0, point.y() - 3, width(), 7));
+    }
+    if (!selection_.isEmpty())
+      addFrame(selection_);
+    if (recentsHotZone().contains(point))
+      add(recentsHotZone());
+    return damage;
+  }
+  if (phase_ != Phase::Edit)
+    return damage;
+
+  for (const ToolbarButton &button : toolbarButtons()) {
+    if (button.rect.contains(point)) {
+      // Includes the hover button and its longest tooltip above/below it.
+      add(button.rect.adjusted(-260, -45, 260, 75));
+      break;
+    }
+  }
+  if (const QRectF pill = scrollPillRect(); pill.contains(point))
+    add(pill.adjusted(-3, -3, 3, 3));
+
+  const QRectF sourceFrame = sourceFrameWidgetRect();
+  const qreal scale = std::max<qreal>(editScale(), 0.001);
+  const auto widgetPoint = [&](const QPointF &annotationPoint) {
+    return sourceFrame.topLeft() + annotationPoint * scale;
+  };
+  const auto annotationRegion = [&](const Annotation &annotation) {
+    QRegion region;
+    const bool stroke = annotation.kind == Annotation::Kind::Arrow ||
+                        annotation.kind == Annotation::Kind::Line ||
+                        annotation.kind == Annotation::Kind::Freehand ||
+                        annotation.kind == Annotation::Kind::Highlighter;
+    if (stroke) {
+      QPainterPath path;
+      if (!annotation.points.isEmpty()) {
+        path.moveTo(widgetPoint(annotation.points.constFirst()));
+        for (qsizetype index = 1; index < annotation.points.size(); ++index)
+          path.lineTo(widgetPoint(annotation.points.at(index)));
+      } else {
+        path.moveTo(widgetPoint(annotation.start));
+        path.lineTo(widgetPoint(annotation.end));
+      }
+      QPainterPathStroker stroker;
+      const qreal width = std::max<qreal>(12.0,
+          annotation.size * scale *
+              (annotation.kind == Annotation::Kind::Highlighter ? 4.0 : 2.5));
+      stroker.setWidth(width);
+      region = QRegion(stroker.createStroke(path).toFillPolygon().toPolygon());
+      if (annotation.kind == Annotation::Kind::Arrow)
+        region |= QRegion(QRectF(widgetPoint(annotation.end) - QPointF(width, width),
+                                 QSizeF(width * 2, width * 2)).toAlignedRect());
+      return region & QRegion(widgetBounds);
+    }
+
+    const QRectF bounds = annotationBounds(annotation);
+    const QRectF shown(widgetPoint(bounds.topLeft()), bounds.size() * scale);
+    const bool outlineOnly =
+        (annotation.kind == Annotation::Kind::Rectangle ||
+         annotation.kind == Annotation::Kind::Ellipse) &&
+        !annotation.filled;
+    if (outlineOnly) {
+      const qreal width = std::max<qreal>(5.0, annotation.size * scale + 4.0);
+      const QRegion outer(shown.adjusted(-width, -width, width, width)
+                              .toAlignedRect());
+      const QRegion inner(shown.adjusted(width, width, -width, -width)
+                              .toAlignedRect());
+      return outer.subtracted(inner) & QRegion(widgetBounds);
+    }
+    return QRegion(shown.adjusted(-16, -16, 16, 16).toAlignedRect()) &
+           QRegion(widgetBounds);
+  };
+
+  if (tool_ == Tool::Marker && !dragging_ && editImageRect().contains(point) &&
+      !pointerGrabsLayer()) {
+    Annotation marker;
+    marker.kind = Annotation::Kind::Marker;
+    marker.start = markerPlacementPoint(point);
+    marker.size = annotationSize_;
+    damage |= annotationRegion(marker);
+  }
+  if (tool_ == Tool::Highlighter && highlighterPreview_) {
+    const qreal height =
+        highlighterPreviewHeight(highlighterPreview_->annotationSize);
+    const QPointF annotationPoint = toAnnotationPoint(point);
+    const QPointF center(annotationPoint.x(), dragging_ && highlighterLock_
+                                                  ? highlighterPreview_->centerY
+                                                  : annotationPoint.y());
+    const QRectF beam = highlighterIBeamBounds(center, height, scale);
+    add(QRectF(widgetPoint(beam.topLeft()), beam.size() * scale));
+  }
+
+  if (!dragging_)
+    return damage;
+  if (interaction_ >= Interaction::CropTopLeft) {
+    damage |= QRegion(widgetBounds);
+    return damage;
+  }
+  if (marqueeSelecting_) {
+    add(QRectF(widgetPoint(marqueeRect_.topLeft()),
+               marqueeRect_.size() * scale));
+    return damage;
+  }
+  if ((interaction_ == Interaction::Move || isLayerResize(interaction_)) &&
+      !selectedAnnotations_.isEmpty()) {
+    for (const int index : selectedAnnotations_) {
+      if (index >= 0 && index < annotations_.size())
+        damage |= annotationRegion(annotations_.at(index));
+    }
+    return damage;
+  }
+  if (tool_ == Tool::Cut && cutDragActive_) {
+    const QRectF band = liveCut_.orientation == Qt::Horizontal
+                            ? QRectF(0, cutBandLo_, selection_.width(),
+                                     cutBandHi_ - cutBandLo_)
+                            : QRectF(cutBandLo_, 0, cutBandHi_ - cutBandLo_,
+                                     selection_.height());
+    add(QRectF(widgetPoint(band.topLeft()), band.size() * scale));
+    return damage;
+  }
+  if (interaction_ != Interaction::None || tool_ == Tool::Select ||
+      tool_ == Tool::Cut)
+    return damage;
+
+  Annotation preview;
+  if (tool_ == Tool::Freehand || tool_ == Tool::Highlighter) {
+    preview.kind = tool_ == Tool::Highlighter ? Annotation::Kind::Highlighter
+                                              : Annotation::Kind::Freehand;
+    preview.points = freehandPoints_;
+  } else if (tool_ == Tool::Text) {
+    preview.kind = Annotation::Kind::Rectangle;
+    preview.start = dragStart_;
+    preview.end = toUnclampedAnnotationPoint(point);
+  } else {
+    preview.kind = dragShapeKind(tool_);
+    const QLineF span = creationSpan(toUnclampedAnnotationPoint(point));
+    preview.start = span.p1();
+    preview.end = span.p2();
+    preview.filled = (tool_ == Tool::Rectangle || tool_ == Tool::Ellipse) &&
+                     fillShapes_;
+  }
+  preview.size = tool_ == Tool::Highlighter && highlighterLock_
+                     ? highlighterLock_->annotationSize
+                     : annotationSize_;
+  damage |= annotationRegion(preview);
+  return damage;
+}
+
+void CaptureEditor::queuePointerRepaint(const QRegion &damage) {
+  pendingPointerDamage_ |= damage & QRegion(rect());
+  if (!pendingPointerDamage_.isEmpty() && !pointerRepaintTimer_.isActive())
+    pointerRepaintTimer_.start();
+}
+
 void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
   if (panning_) {
     panView(event->position() - panAnchor_);
     panAnchor_ = event->position();
     return;
   }
+  const QRegion oldPointerVisual = pointerMotionRegion(cursor_);
+  const QRectF oldSelection = selection_;
+  const int oldHoveredWindow = hoveredWindow_;
   cursor_ = event->position();
   if (phase_ == Phase::Export)
     return;
@@ -4076,7 +4315,8 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
   } else {
     if (tool_ == Tool::Select && marqueeSelecting_) {
       marqueeRect_ = QRectF(dragStart_, toAnnotationPoint(cursor_)).normalized();
-      update();
+      updatePointerCursor();
+      queuePointerRepaint(oldPointerVisual | pointerMotionRegion(cursor_));
       return;
     }
     if (tool_ == Tool::Select && dragging_ &&
@@ -4345,7 +4585,24 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
     }
   }
   updatePointerCursor();
-  update();
+  QRegion damage = oldPointerVisual | pointerMotionRegion(cursor_);
+  if (phase_ == Phase::Select && dragging_ && oldSelection != selection_) {
+    const QRegion oldHole(oldSelection.normalized().toAlignedRect());
+    const QRegion newHole(selection_.normalized().toAlignedRect());
+    damage |= oldHole.xored(newHole);
+  }
+  if (phase_ == Phase::Select && windowMode_ &&
+      oldHoveredWindow != hoveredWindow_) {
+    if (oldHoveredWindow >= 0 && oldHoveredWindow < capture_.windows.size())
+      damage |= QRegion(mapPreviewToWidget(
+                           QRectF(capture_.windows.at(oldHoveredWindow).rect))
+                           .toAlignedRect());
+    if (hoveredWindow_ >= 0 && hoveredWindow_ < capture_.windows.size())
+      damage |= QRegion(mapPreviewToWidget(
+                           QRectF(capture_.windows.at(hoveredWindow_).rect))
+                           .toAlignedRect());
+  }
+  queuePointerRepaint(damage);
 }
 
 void CaptureEditor::mouseDoubleClickEvent(QMouseEvent *event) {
@@ -4711,8 +4968,10 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
       highlighterLock_.reset();
       QPointF strokeStart = point;
       if (tool_ == Tool::Highlighter &&
-          highlighterMode_ == HighlighterMode::Snap)
-        highlighterLock_ = highlighterLockAt(point);
+          highlighterMode_ == HighlighterMode::Snap && highlighterPreview_ &&
+          highlighterPreviewPoint_ &&
+          QLineF(*highlighterPreviewPoint_, point).length() <= 24.0)
+        highlighterLock_ = highlighterPreview_;
       if (highlighterLock_)
         strokeStart.setY(highlighterLock_->centerY);
       freehandPoints_.push_back(strokeStart);
@@ -5141,46 +5400,69 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
 }
 
 void CaptureEditor::updatePointerCursor() {
-  highlighterPreview_.reset();
+  const auto applyCursor = [this](Qt::CursorShape shape) {
+    // Avoid re-submitting the same cursor for every mouse sample.
+    // High-polling-rate mice can otherwise spend measurable UI-thread time
+    // repeating a request whose visible result is unchanged.
+    if (cursor().shape() != shape)
+      setCursor(shape);
+  };
+  const auto clearHighlighterPreview = [this] {
+    highlighterPreview_.reset();
+    highlighterPreviewPoint_.reset();
+    pendingHighlighterProbePoint_.reset();
+    ++highlighterProbeGeneration_; // invalidate an in-flight image probe
+  };
+
   if (phase_ == Phase::Export) {
-    setCursor(Qt::WaitCursor);
+    clearHighlighterPreview();
+    applyCursor(Qt::WaitCursor);
     return;
   }
   if (phase_ == Phase::Select) {
-    setCursor(windowMode_ || selectTabAt(cursor_) >= 0 ||
-                      (recentsOpen_ && recentAt(cursor_) >= 0)
-                  ? Qt::PointingHandCursor
-              : recentsOpen_ ? Qt::ArrowCursor
-                             : Qt::CrossCursor);
+    clearHighlighterPreview();
+    applyCursor(windowMode_ || selectTabAt(cursor_) >= 0 ||
+                        (recentsOpen_ && recentAt(cursor_) >= 0)
+                    ? Qt::PointingHandCursor
+                : recentsOpen_ ? Qt::ArrowCursor
+                               : Qt::CrossCursor);
     return;
   }
   if (selectTabAt(cursor_) >= 0 || scrollPillRect().contains(cursor_)) {
-    setCursor(Qt::PointingHandCursor);
+    clearHighlighterPreview();
+    applyCursor(Qt::PointingHandCursor);
     return;
   }
   if ((colorPaletteOpen_ && colorPaletteRect().contains(cursor_)) ||
       (customColorPickerOpen_ && customColorPanelRect().contains(cursor_)) ||
       (shapeMenuOpen_ && shapeMenuRect().contains(cursor_))) {
-    setCursor(Qt::PointingHandCursor);
+    clearHighlighterPreview();
+    applyCursor(Qt::PointingHandCursor);
     return;
   }
   if (textSizeMenuOpen_ && !colorPaletteOpen_ && !customColorPickerOpen_ &&
       textSizePanelRect().contains(cursor_)) {
-    setCursor(Qt::PointingHandCursor);
+    clearHighlighterPreview();
+    applyCursor(Qt::PointingHandCursor);
     return;
   }
   for (const ToolbarButton &button : toolbarButtons()) {
     if (button.rect.contains(cursor_)) {
-      setCursor(Qt::PointingHandCursor);
+      clearHighlighterPreview();
+      applyCursor(Qt::PointingHandCursor);
       return;
     }
   }
   const bool resizing = dragging_ && isLayerResize(interaction_);
-  if (resizing || (!dragging_ && pointerHandle() != Interaction::None)) {
-    setCursor(handleCursorShape(resizing ? interaction_ : pointerHandle()));
+  const Interaction hoverHandle =
+      !dragging_ ? pointerHandle() : Interaction::None;
+  if (resizing || hoverHandle != Interaction::None) {
+    clearHighlighterPreview();
+    applyCursor(handleCursorShape(resizing ? interaction_ : hoverHandle));
     return;
   }
   if (tool_ == Tool::Select) {
+    clearHighlighterPreview();
     int cropHandle =
         selectedAnnotations_.isEmpty() ? cropHandleAt(cursor_) : -1;
     if (dragging_ && interaction_ >= Interaction::CropTopLeft) {
@@ -5188,41 +5470,51 @@ void CaptureEditor::updatePointerCursor() {
                    static_cast<int>(Interaction::CropTopLeft);
     }
     if (cropHandle == 0 || cropHandle == 4)
-      setCursor(Qt::SizeFDiagCursor);
+      applyCursor(Qt::SizeFDiagCursor);
     else if (cropHandle == 2 || cropHandle == 6)
-      setCursor(Qt::SizeBDiagCursor);
+      applyCursor(Qt::SizeBDiagCursor);
     else if (cropHandle == 1 || cropHandle == 5)
-      setCursor(Qt::SizeVerCursor);
+      applyCursor(Qt::SizeVerCursor);
     else if (cropHandle == 3 || cropHandle == 7)
-      setCursor(Qt::SizeHorCursor);
+      applyCursor(Qt::SizeHorCursor);
     else
-      setCursor(Qt::ArrowCursor);
-  } else if (interaction_ == Interaction::Move && dragging_)
-    setCursor(Qt::SizeAllCursor);
-  else if (!dragging_ && pointerGrabsLayer())
-    // An I-beam over a committed text reads as "click to edit" when the click
-    // will move it, so what is under the pointer decides the cursor.
-    setCursor(Qt::SizeAllCursor);
-  else if (tool_ == Tool::Marker)
-    setCursor(Qt::PointingHandCursor);
-  else if (tool_ == Tool::Text)
-    setCursor(Qt::IBeamCursor);
-  else if (tool_ == Tool::Cut)
-    setCursor(Qt::CrossCursor);
-  else if (tool_ == Tool::Highlighter) {
+      applyCursor(Qt::ArrowCursor);
+  } else if (interaction_ == Interaction::Move && dragging_) {
+    clearHighlighterPreview();
+    applyCursor(Qt::SizeAllCursor);
+  } else if (!dragging_ && pointerGrabsLayer()) {
+    clearHighlighterPreview();
+    // An I-beam over committed text reads as edit, although the click moves it.
+    applyCursor(Qt::SizeAllCursor);
+  } else if (tool_ == Tool::Marker) {
+    clearHighlighterPreview();
+    applyCursor(Qt::PointingHandCursor);
+  } else if (tool_ == Tool::Text) {
+    clearHighlighterPreview();
+    applyCursor(Qt::IBeamCursor);
+  } else if (tool_ == Tool::Cut) {
+    clearHighlighterPreview();
+    applyCursor(Qt::CrossCursor);
+  } else if (tool_ == Tool::Highlighter) {
     if (highlighterMode_ == HighlighterMode::Snap) {
-      highlighterPreview_ =
-          dragging_ ? highlighterLock_
-                    : editImageRect().contains(cursor_)
-                          ? highlighterLockAt(toAnnotationPoint(cursor_))
-                          : std::nullopt;
+      if (dragging_) {
+        highlighterPreview_ = highlighterLock_;
+        highlighterPreviewPoint_.reset();
+      } else if (editImageRect().contains(cursor_)) {
+        scheduleHighlighterProbe(toAnnotationPoint(cursor_));
+      } else {
+        clearHighlighterPreview();
+      }
+    } else {
+      clearHighlighterPreview();
     }
-    // Qt's stock I-beam has a fixed text-editor height. Paint the measured
-    // one ourselves so its serifs span exactly the row the stroke will lock.
-    setCursor(highlighterPreview_ ? Qt::BlankCursor : Qt::CrossCursor);
+    // The measured I-beam is painted by the overlay; no image analysis runs
+    // in this input handler.
+    applyCursor(highlighterPreview_ ? Qt::BlankCursor : Qt::CrossCursor);
+  } else {
+    clearHighlighterPreview();
+    applyCursor(Qt::CrossCursor);
   }
-  else
-    setCursor(Qt::CrossCursor);
 }
 
 void CaptureEditor::refreshComposedCapture() {
@@ -6647,13 +6939,15 @@ void CaptureEditor::paintEdit(QPainter &painter) {
 }
 
 void CaptureEditor::paintEvent(QPaintEvent *event) {
-  Q_UNUSED(event)
   const bool firstPaint = !firstPaintReported_;
   if (firstPaint)
     startupTimingMark("first overlay paint started");
   if (scrollPanel_)
     return; // the panel owns the surface; the page shows through its hole
   QPainter painter(this);
+  // Make Qt's widget damage explicit to every nested paint helper. The
+  // backing store retains the rest of the translucent layer surface.
+  painter.setClipRegion(event->region());
   painter.setRenderHints(QPainter::Antialiasing |
                          QPainter::SmoothPixmapTransform |
                          QPainter::TextAntialiasing);

@@ -11,6 +11,7 @@
 #include <QFutureWatcher>
 #include <QPlainTextEdit>
 #include <QPixmap>
+#include <QRegion>
 #include <QLineF>
 #include <QTimer>
 #include <QWidget>
@@ -304,6 +305,9 @@ public:
   /// Active highlighter button geometry. Test accessor for repeated-tool
   /// behavior without duplicating the responsive toolbar layout.
   [[nodiscard]] QRectF highlighterToolbarRectForTest() const;
+  [[nodiscard]] QRegion pointerMotionRegionForTest(const QPointF &point) const {
+    return pointerMotionRegion(point);
+  }
   /// Whether the selection chrome is currently stepped back for an adjustment.
   /// Test accessor.
   [[nodiscard]] bool selectionFadedForTest() const {
@@ -570,6 +574,8 @@ private:
   void dismissOcrOverlay();
   void paintOcrOverlay(QPainter &painter, const QRectF &image, qreal scale);
   void setStatus(QString status);
+  [[nodiscard]] QRegion pointerMotionRegion(const QPointF &point) const;
+  void queuePointerRepaint(const QRegion &damage);
   void toggleShapeFill();
   void toggleTextBackground();
   void cycleTextFont();
@@ -654,8 +660,13 @@ private:
     qreal centerY = 0.0;
     qreal annotationSize = 0.0;
   };
-  [[nodiscard]] std::optional<HighlighterLock>
-  highlighterLockAt(const QPointF &annotationPoint) const;
+  struct HighlighterProbeResult {
+    quint64 generation = 0;
+    QPointF annotationPoint;
+    std::optional<HighlighterLock> lock;
+  };
+  void scheduleHighlighterProbe(const QPointF &annotationPoint);
+  void completeHighlighterProbe();
   /// Set when a highlighter drag begins near a detected screenshot text row.
   /// Coordinates and size are selection-relative logical pixels, so the lock
   /// survives view zoom and native/fractional monitor scaling.
@@ -663,6 +674,10 @@ private:
   /// Detected row supplying the Snap cursor's height. Before mouse-down its
   /// center follows the pointer; during a locked drag it follows the row.
   std::optional<HighlighterLock> highlighterPreview_;
+  std::optional<QPointF> highlighterPreviewPoint_;
+  std::optional<QPointF> pendingHighlighterProbePoint_;
+  quint64 highlighterProbeGeneration_ = 0;
+  QFutureWatcher<HighlighterProbeResult> highlighterProbeWatcher_;
   HighlighterMode highlighterMode_ = HighlighterMode::Snap;
   // Cut tool live-drag state. cutDragStart_/cutBandLo_/cutBandHi_ and
   // liveCut_.orientation are in annotation space (selection-relative logical
@@ -802,6 +817,8 @@ private:
   QTimer textCaretTimer_;
   QElapsedTimer nudgeTimer_;
   QTimer nudgePersistTimer_;
+  QTimer pointerRepaintTimer_;
+  QRegion pendingPointerDamage_;
   /// View transform for navigating an oversized capture (e.g. a tall scroll
   /// stitch). `viewZoom_` multiplies the fit scale (1 = whole image visible);
   /// `viewOffset_` pans in widget pixels. Reset on entering edit.

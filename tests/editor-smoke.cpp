@@ -714,6 +714,16 @@ bool runTextAwareHighlighterEditorCheck(QApplication &application,
   const auto widgetPoint = [&editor](qreal x, qreal y) {
     return editor.toScreenPointForTest(QPointF(x, y)).toPoint();
   };
+  const auto waitForPreview = [&](bool present) {
+    QElapsedTimer timeout;
+    timeout.start();
+    while (editor.highlighterPreviewRectForTest().isEmpty() == present &&
+           timeout.elapsed() < 2000) {
+      application.processEvents(QEventLoop::ExcludeUserInputEvents);
+      QThread::yieldCurrentThread();
+    }
+    return editor.highlighterPreviewRectForTest().isEmpty() != present;
+  };
 
   QTest::keyClick(&editor, Qt::Key_H);
   application.processEvents();
@@ -728,6 +738,10 @@ bool runTextAwareHighlighterEditorCheck(QApplication &application,
   // the pointer fluidly until mouse-down commits to a row.
   QTest::mouseMove(&editor, widgetPoint(105, 114), 10);
   application.processEvents();
+  if (!waitForPreview(true)) {
+    error = QStringLiteral("Highlighter text probe did not finish");
+    return false;
+  }
   const QRectF firstBeam = editor.highlighterPreviewRectForTest();
   QTest::mouseMove(&editor, widgetPoint(105, 120), 10);
   application.processEvents();
@@ -748,13 +762,18 @@ bool runTextAwareHighlighterEditorCheck(QApplication &application,
   }
   QTest::mouseMove(&editor, widgetPoint(70, 180), 10);
   application.processEvents();
-  if (!editor.highlighterPreviewRectForTest().isEmpty() ||
+  if (!waitForPreview(false) ||
+      !editor.highlighterPreviewRectForTest().isEmpty() ||
       editor.cursor().shape() != Qt::CrossCursor) {
     error = QStringLiteral("Highlighter I-beam did not fall back off text");
     return false;
   }
   QTest::mouseMove(&editor, widgetPoint(105, 118), 10);
   application.processEvents();
+  if (!waitForPreview(true)) {
+    error = QStringLiteral("Highlighter text probe did not return before drag");
+    return false;
+  }
 
   // Start just below the glyph box, then deliberately wobble far above and
   // below it. Every recorded point should remain on the detected centerline.
@@ -1141,6 +1160,39 @@ bool runCreationConstraintCheck(QString &error) {
       error = QStringLiteral("Centered creation changed an unrelated tool");
       return false;
     }
+  }
+  return true;
+}
+
+/** Pointer-only chrome damages narrow strips/local badges, never a full 6K
+ *  overlay. QWidget's backing store preserves every pixel outside this region. */
+bool runPointerDamageRegionCheck(QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 6016, 3384};
+  capture.monitor.pixelSize = {6016, 3384};
+  capture.monitor.scale = 1.0;
+  capture.previewSize = capture.monitor.pixelSize;
+  capture.source = QImage(32, 18, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#182030")));
+
+  CaptureEditor editor(capture);
+  editor.resize(capture.previewSize);
+  const QRegion motion =
+      editor.pointerMotionRegionForTest(QPointF(1000, 900)) |
+      editor.pointerMotionRegionForTest(QPointF(5000, 2600));
+  qint64 damagedPixels = 0;
+  for (const QRect &rect : motion)
+    damagedPixels += static_cast<qint64>(rect.width()) * rect.height();
+  const qint64 screenPixels =
+      static_cast<qint64>(capture.previewSize.width()) *
+      capture.previewSize.height();
+  if (motion.isEmpty() || damagedPixels >= screenPixels / 20) {
+    error = QStringLiteral(
+        "Pointer chrome damaged %1 of %2 6K pixels instead of narrow regions")
+                .arg(damagedPixels)
+                .arg(screenPixels);
+    return false;
   }
   return true;
 }
@@ -7958,6 +8010,10 @@ int main(int argc, char **argv) {
   if (!runMeasurementReadoutCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 95;
+  }
+  if (!runPointerDamageRegionCheck(snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 135;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
