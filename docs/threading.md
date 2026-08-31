@@ -21,7 +21,7 @@ Every background operation in the codebase follows the same shape:
 4. A `busy_`-style flag (or a more specific one) blocks reentrancy while the
    watcher is in flight, and the status pill says what is happening.
 
-`src/editor.hpp` currently has these watchers, each the entry point for
+`src/editor.hpp` keeps dedicated watchers, each the entry point for
 reading its corresponding worker:
 
 | Watcher | Worker does |
@@ -33,6 +33,8 @@ reading its corresponding worker:
 | `pinWatcher_` | Renders and PNG-writes the image for a pinned window |
 | `recentsWatcher_` | Lists and decodes thumbnails for the recents shelf |
 | `reopenWatcher_` | Decodes a shelved full-resolution source + its operation log |
+| `backdropWatcher_` | Decodes an optional user-supplied backdrop image |
+| `highlighterProbeWatcher_` | Detects a nearby screenshot text row for highlighter Snap mode |
 
 `src/scroll-capture.cpp` follows the same rule with a plain `QFuture<void>`:
 the capture loop (grab → crop → classify → accumulate) runs on a worker
@@ -52,6 +54,22 @@ frames come in.
   stalls painting the overlay's own chrome.
 - **Recents reopen**: a shelved stitched capture can be tens of megapixels.
   Decode happens on `reopenWatcher_`, not in the click handler.
+
+## Pointer motion on large monitors
+
+Input and `QWidget` painting necessarily share Qt's GUI thread, but pointer
+motion must not turn into a full-surface render. This matters on a 6K display:
+a single full ARGB frame is over 80 MB before compositor copies.
+
+`CaptureEditor` therefore treats pointer chrome as damaged regions. Crosshair
+lines, measurement badges, toolbar hover, annotation previews, and drag shapes
+invalidate only their old/new pixels; Qt's backing store preserves the rest.
+High-rate mouse samples are coalesced to at most one repaint per 16 ms. The
+text-aware highlighter is stricter still: scanning screenshot pixels happens
+through `highlighterProbeWatcher_`, and mouse-down uses the latest completed
+probe rather than scanning in the input handler. Reintroducing a bare
+`update()` in `mouseMoveEvent`, or image analysis from `updatePointerCursor()`,
+turns that bounded path back into a full-display stall.
 
 ## The one documented exception
 

@@ -24,11 +24,13 @@ undo, crash recovery, and the recents shelf simultaneously.
 
 `renderCapture(capture, selection, annotations, backgroundStyle)` in
 `src/capture.cpp` takes the pristine source image and the current vector
-state and produces a flattened `QImage`. It runs constantly during editing
-(every paint, effectively) and is cheap enough to do so because it never
-mutates its inputs. **Nothing is baked into the working image as you draw.**
-Add a rectangle, change your mind, delete it — the source pixels underneath
-were never touched.
+state and produces a flattened `QImage`. Output workers call it when they
+need a complete raster. Interactive painting follows the same layer order
+but keeps the unannotated/redacted display base cached and paints vectors
+only into Qt's damaged region; pointer motion on a 6K display must not
+flatten or repaint the full capture. **Nothing is baked into the working
+image as you draw.** Add a rectangle, change your mind, delete it — the
+source pixels underneath were never touched.
 
 Output happens at exactly three moments, all user-initiated: **Copy**,
 **Save**, or both together (`CaptureEditor::finish()`), plus pinning a
