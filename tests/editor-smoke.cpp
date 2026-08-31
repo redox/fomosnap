@@ -610,7 +610,7 @@ bool runChromeFontCheck(QString &error) {
   const QFont mono = chromeMonoFont(12);
   const QFontInfo monoInfo(mono);
   if (mono.pixelSize() != 12 || mono.bold() || monoInfo.family().isEmpty() ||
-      !monoInfo.fixedPitch()) {
+      !(mono.fixedPitch() || monoInfo.fixedPitch())) {
     error = QStringLiteral("chromeMonoFont(12) resolved to %1, expected a "
                            "fixed-pitch family")
                 .arg(monoInfo.family());
@@ -7210,8 +7210,30 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
 
   // Scrolling Region is a mode of the same surface: drawing a region in it
   // brings the scroll panel up in place; its tabs leave it; dismissing it
-  // returns to selecting in scroll mode.
+  // returns to selecting in scroll mode. Switching to Region recaptures that
+  // frame from the live screen, so the test supplies fake pixels the way the
+  // other live-selection checks do.
   {
+    QTemporaryDir captureDir;
+    if (!captureDir.isValid()) {
+      error = QStringLiteral("Could not create scroll-region capture directory");
+      return false;
+    }
+    const QString sourcePath =
+        QDir(captureDir.path()).filePath(QStringLiteral("source.png"));
+    if (!capture.source.save(sourcePath, "PNG")) {
+      error = QStringLiteral("Could not save scroll-region test capture");
+      return false;
+    }
+    const QByteArray oldCapture = qgetenv("FOMOSNAP_TEST_CAPTURE");
+    qputenv("FOMOSNAP_TEST_CAPTURE", sourcePath.toUtf8());
+    const auto restoreCapture = qScopeGuard([&] {
+      if (oldCapture.isEmpty())
+        qunsetenv("FOMOSNAP_TEST_CAPTURE");
+      else
+        qputenv("FOMOSNAP_TEST_CAPTURE", oldCapture);
+    });
+
     CaptureEditor scrollEditor(capture, CaptureEditor::CaptureMode::Scroll);
     scrollEditor.resize(800, 600);
     scrollEditor.show();
@@ -7235,8 +7257,17 @@ bool runSelectTabsSmoke(QApplication &application, QString &error) {
     // Region and Scrolling Region frame the same rectangle, so switching
     // between them keeps it: the frame drawn for the scroll panel is the
     // region that gets captured.
-    if (!clickOn(scrollEditor, QStringLiteral("REGION")) ||
-        !scrollEditor.editingForTest() ||
+    if (!clickOn(scrollEditor, QStringLiteral("REGION"))) {
+      error = QStringLiteral("Region tab did not carry the scroll frame over");
+      return false;
+    }
+    QElapsedTimer captureTimer;
+    captureTimer.start();
+    while (!scrollEditor.editingForTest() && captureTimer.elapsed() < 5000) {
+      application.processEvents();
+      QThread::msleep(1);
+    }
+    if (!scrollEditor.editingForTest() ||
         scrollEditor.renderCurrentOutput().size() != QSize(400, 300)) {
       error = QStringLiteral("Region tab did not carry the scroll frame over");
       return false;

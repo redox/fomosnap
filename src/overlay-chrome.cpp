@@ -20,7 +20,11 @@ QFont chromeDefaultFont() {
 }
 
 QFont chromeMonoFont(int pixelSize, bool bold) {
-  QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+  QFont font;
+  font.setFamilies(
+      {QStringLiteral("Menlo"), QStringLiteral("Courier")});
+  font.setStyleHint(QFont::TypeWriter);
+  font.setFixedPitch(true);
   font.setPixelSize(pixelSize);
   font.setBold(bold);
   return font;
