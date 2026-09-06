@@ -1,4 +1,6 @@
 /** @fileoverview Captures, renders, saves, and shares screenshots. */
+#include <QTextLayout>
+#include <QTextOption>
 #include "capture.hpp"
 #include "mac/mac-platform.hpp"
 #include "output-config.hpp"
@@ -111,39 +113,26 @@ QStringList annotationTextLines(const Annotation &annotation,
   const qreal wrap = annotationTextWrapWidth(annotation, canvasWidth);
   if (wrap <= 0.0)
     return paragraphs;
-  const QFontMetricsF metrics(
-      annotationTextFont(annotation.size, annotation.textFont));
   QStringList lines;
   for (const QString &paragraph : paragraphs) {
-    if (metrics.horizontalAdvance(paragraph) <= wrap) {
+    if (paragraph.isEmpty()) {
       lines.push_back(paragraph);
       continue;
     }
-    // Break on spaces, and only mid-word when a single word cannot fit, so a
-    // long URL still wraps instead of running off the capture.
-    QString line;
-    for (const QString &word : paragraph.split(' ')) {
-      const QString candidate = line.isEmpty() ? word : line + ' ' + word;
-      if (metrics.horizontalAdvance(candidate) <= wrap) {
-        line = candidate;
-        continue;
-      }
-      if (!line.isEmpty()) {
-        lines.push_back(line);
-        line.clear();
-      }
-      QString rest = word;
-      while (metrics.horizontalAdvance(rest) > wrap && rest.size() > 1) {
-        int fit = 1;
-        while (fit < rest.size() &&
-               metrics.horizontalAdvance(rest.left(fit + 1)) <= wrap)
-          ++fit;
-        lines.push_back(rest.left(fit));
-        rest = rest.mid(fit);
-      }
-      line = rest;
+    QTextLayout layout(paragraph,
+                       annotationTextFont(annotation.size, annotation.textFont));
+    QTextOption option;
+    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    layout.setTextOption(option);
+    layout.beginLayout();
+    while (true) {
+      QTextLine line = layout.createLine();
+      if (!line.isValid())
+        break;
+      line.setLineWidth(wrap);
+      lines.push_back(paragraph.mid(line.textStart(), line.textLength()));
     }
-    lines.push_back(line);
+    layout.endLayout();
   }
   return lines;
 }
@@ -153,8 +142,14 @@ QRectF annotationTextBounds(const Annotation &annotation, qreal canvasWidth) {
       annotationTextFont(annotation.size, annotation.textFont));
   const QStringList lines = annotationTextLines(annotation, canvasWidth);
   qreal widestLine = 0.0;
-  for (const QString &line : lines)
-    widestLine = std::max(widestLine, metrics.horizontalAdvance(line));
+  for (const QString &line : lines) {
+    // QTextLayout excludes trailing wrap whitespace from naturalTextWidth;
+    // keep indentation, but match that painted width for the pill.
+    QString visible = line;
+    while (!visible.isEmpty() && visible.back().isSpace())
+      visible.chop(1);
+    widestLine = std::max(widestLine, metrics.horizontalAdvance(visible));
+  }
   const QRectF glyphs(
       annotation.start.x(), annotation.start.y() - metrics.ascent(), widestLine,
       metrics.height() +
