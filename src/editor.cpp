@@ -1706,6 +1706,7 @@ bool CaptureEditor::adjustSelectedAnnotationRing(int step) {
     return false;
   Annotation &annotation = annotations_[selectedAnnotation_];
   if (annotation.kind == Annotation::Kind::Rectangle) {
+    beginSelectionAdjust();
     // The selected rectangle's own corners, undoably; the armed tool's
     // default radius stays what it was.
     annotation.cornerRadius =
@@ -5695,7 +5696,7 @@ void CaptureEditor::wheelEvent(QWheelEvent *event) {
                   .arg(annotationTextFontName(textFont_))
                   .arg(QString::fromLatin1(kTextSizeNames.at(
                       static_cast<std::size_t>(textSizeIndex_)))));
-  } else if (tool_ == Tool::Freehand &&
+  } else if (tool_ == Tool::Freehand && !layerSelected &&
              modifiers.testFlag(Qt::AltModifier)) {
     freehandSmoothingLevel_ =
         std::clamp(freehandSmoothingLevel_ + step,

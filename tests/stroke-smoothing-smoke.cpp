@@ -416,6 +416,29 @@ bool runStrokeSmoothingSmoke(QApplication &application, QString &error) {
       error = QStringLiteral("The next pen stroke ignored its armed smoothing");
       return false;
     }
+    // A selected line has no secondary control. Arming F must not allow
+    // Alt+wheel to silently change the next stroke's smoothing.
+    QTest::keyClick(&defaultsEditor, Qt::Key_L);
+    const QPoint lineStart = (imageOrigin + QPointF(40, 180)).toPoint();
+    const QPoint lineEnd = (imageOrigin + QPointF(180, 180)).toPoint();
+    QTest::mousePress(&defaultsEditor, Qt::LeftButton, Qt::NoModifier, lineStart);
+    QTest::mouseMove(&defaultsEditor, lineEnd, 1);
+    QTest::mouseRelease(&defaultsEditor, Qt::LeftButton, Qt::NoModifier, lineEnd);
+    QTest::keyClick(&defaultsEditor, Qt::Key_V);
+    QTest::mouseClick(&defaultsEditor, Qt::LeftButton, Qt::NoModifier,
+                      (lineStart + lineEnd) / 2);
+    QTest::keyClick(&defaultsEditor, Qt::Key_F);
+    if (defaultsEditor.selectedCountForTest() != 1) {
+      error = QStringLiteral("Pen default regression fixture lost selection");
+      return false;
+    }
+    QApplication::sendEvent(&defaultsEditor, &defaultWheel);
+    QTest::keyClick(&defaultsEditor, Qt::Key_V);
+    QTest::keyClick(&defaultsEditor, Qt::Key_F);
+    if (!defaultsEditor.statusForTest().contains(QStringLiteral("smoothing 4/6"))) {
+      error = QStringLiteral("Selected line changed the armed pen smoothing");
+      return false;
+    }
     defaultsEditor.close();
   }
 
