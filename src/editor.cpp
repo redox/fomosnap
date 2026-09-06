@@ -2121,13 +2121,7 @@ QRectF CaptureEditor::annotationWorkspaceRect() const {
 }
 
 bool CaptureEditor::canStartAnnotationAt(const QPointF &position) const {
-  if (requiresSourcePixels(tool_))
-    return sourceFrameWidgetRect().contains(position);
-  if (editImageRect().contains(position))
-    return true;
-  if (canvasBoundaryMode_ == CanvasBoundaryMode::Image ||
-      !supportsOffCanvasCreation(tool_) ||
-      !annotationWorkspaceRect().contains(position))
+  if (!annotationWorkspaceRect().contains(position))
     return false;
   // Popovers overlap the content band. Their buttons are handled before the
   // workspace, while their padding must remain chrome rather than canvas.
@@ -2136,7 +2130,12 @@ bool CaptureEditor::canStartAnnotationAt(const QPointF &position) const {
       (shapeMenuOpen_ && shapeMenuRect().contains(position)) ||
       (textSizeMenuOpen_ && textSizePanelRect().contains(position)))
     return false;
-  return true;
+  if (requiresSourcePixels(tool_))
+    return sourceFrameWidgetRect().contains(position);
+  if (editImageRect().contains(position))
+    return true;
+  return canvasBoundaryMode_ != CanvasBoundaryMode::Image &&
+         supportsOffCanvasCreation(tool_);
 }
 
 qreal CaptureEditor::maxViewZoom() const {
@@ -4481,7 +4480,7 @@ QRegion CaptureEditor::pointerMotionRegion(const QPointF &point) const {
            QRegion(widgetBounds);
   };
 
-  if (tool_ == Tool::Marker && !dragging_ && editImageRect().contains(point) &&
+  if (tool_ == Tool::Marker && !dragging_ && canStartAnnotationAt(point) &&
       !pointerGrabsLayer()) {
     Annotation marker;
     marker.kind = Annotation::Kind::Marker;

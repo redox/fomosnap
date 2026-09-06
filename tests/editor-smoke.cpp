@@ -4519,6 +4519,26 @@ bool runOffCanvasCreationSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Image boundary accepted an off-canvas start");
     return false;
   }
+  // A zoomed image may extend underneath chrome, but those pixels must
+  // never become actionable annotation workspace.
+  for (int i = 0; i < 10; ++i) {
+    QWheelEvent zoom(QPointF(inside), editor.mapToGlobal(inside), QPoint(),
+                     QPoint(0, 120), Qt::NoButton, Qt::ControlModifier,
+                     Qt::NoScrollPhase, false);
+    QApplication::sendEvent(&editor, &zoom);
+  }
+  const QPoint underChrome(inside.x(), editor.height() - 2);
+  if (!editor.editImageRectForTest().contains(underChrome)) {
+    error = QStringLiteral("Zoom fixture did not extend under editor chrome");
+    return false;
+  }
+  drag(underChrome, inside);
+  if (!editor.currentAnnotationsForTest().isEmpty()) {
+    error = QStringLiteral("Zoomed image accepted an annotation under chrome");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_0, Qt::ControlModifier);
+
   return true;
 }
 
