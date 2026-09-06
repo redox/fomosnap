@@ -3429,7 +3429,7 @@ void CaptureEditor::ensureTextEditor() {
     // edge rather than running off it, where its handle is unreachable.
     const int desiredWidth =
         textEditWrapWidth_ > 0.0
-            ? std::max(48, qRound(textEditWrapWidth_) + sidePadding * 2)
+            ? std::max(48, qRound(textEditWrapWidth_ * editScale()) + sidePadding * 2)
             : std::max(48, widestLine + sidePadding * 2);
     const int width = std::min(desiredWidth, availableWidth);
     textEditor_->resize(width, textEditor_->height());
@@ -3551,8 +3551,12 @@ void CaptureEditor::acceptText(bool keepSelected) {
         const QFontMetricsF metrics(
             annotationTextFont(annotation.size, annotation.textFont));
         qreal widest = 0.0;
-        for (const QString &line : wrapped)
-          widest = std::max(widest, metrics.horizontalAdvance(line));
+        for (const QString &line : wrapped) {
+          QString visible = line;
+          while (!visible.isEmpty() && visible.back().isSpace())
+            visible.chop(1);
+          widest = std::max(widest, metrics.horizontalAdvance(visible));
+        }
         annotation.textWidth = widest + 2.0;
       }
     }
@@ -4741,8 +4745,14 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
           // painted extent grows the canvas, so the handle remains reachable
           // without being clamped back to the source frame.
           const QRectF originalBounds = annotationBounds(originalAnnotation_);
+          const QFontMetricsF metrics(annotationTextFont(
+              annotation.size, annotation.textFont));
+          const qreal padding = annotation.textBackground == TextBackground::Pill
+                                    ? std::max<qreal>(4.0, metrics.height() * 0.18)
+                                    : 0.0;
           annotation.textWidth = std::max<qreal>(
-              kMinimumTextWrapWidth, point.x() - originalBounds.left());
+              kMinimumTextWrapWidth,
+              point.x() - originalBounds.left() - 2.0 * padding);
         }
       } else if (interaction_ == Interaction::ResizeControl &&
                  annotation.kind == Annotation::Kind::Arrow &&

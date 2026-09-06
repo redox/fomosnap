@@ -5995,6 +5995,26 @@ bool runTextWrapRenderingCheck(QString &error) {
   text.size = 5;
   text.text = QStringLiteral("the quick brown fox jumps over the lazy dog");
 
+  Annotation indented = text;
+  indented.text = QStringLiteral("one\n  indented paragraph with more words");
+  indented.textWidth = 120;
+  const QStringList indentLines = annotationTextLines(indented);
+  if (indentLines.join(QString()) != QString(indented.text).remove('\n')) {
+    error = QStringLiteral("Wrapping discarded whitespace from the text");
+    return false;
+  }
+  const QTemporaryDir roundTrip;
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {indented};
+  const OperationLog saved{{annotate}, 1, 2, 1, QSize(800, 600)};
+  OperationLog loaded;
+  const QString logPath = roundTrip.filePath(QStringLiteral("wrapped.json"));
+  if (!saveOperationLog(logPath, saved, error) ||
+      !loadOperationLog(logPath, loaded, error) || loaded != saved) {
+    error = QStringLiteral("Wrapped text did not survive operation-log reload");
+    return false;
+  }
   // Unbounded: one line, however long it is.
   if (annotationTextLines(text, 0.0).size() != 1) {
     error = QStringLiteral("Unbounded text did not stay on one line");
@@ -6010,7 +6030,7 @@ bool runTextWrapRenderingCheck(QString &error) {
   }
   const QFontMetricsF metrics(annotationTextFont(text.size));
   for (const QString &line : wrapped) {
-    if (metrics.horizontalAdvance(line) > 120.0) {
+    if (metrics.horizontalAdvance(line.trimmed()) > 120.0) {
       error = QStringLiteral("A wrapped line ran past the wrap width");
       return false;
     }
@@ -6034,7 +6054,7 @@ bool runTextWrapRenderingCheck(QString &error) {
   // A single word wider than the wrap width breaks rather than overflowing.
   text.text = QStringLiteral("supercalifragilisticexpialidocious");
   for (const QString &line : annotationTextLines(text, 0.0)) {
-    if (metrics.horizontalAdvance(line) > 120.0) {
+    if (metrics.horizontalAdvance(line.trimmed()) > 120.0) {
       error = QStringLiteral("An over-long word ran past the wrap width");
       return false;
     }
