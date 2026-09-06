@@ -8579,6 +8579,36 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   const std::array<ArrowStyle, 4> styles{ArrowStyle::Standard,
                                          ArrowStyle::Pointy, ArrowStyle::Curved,
                                          ArrowStyle::Double};
+  // Canvas growth must include the real arc and heads, including controls
+  // far outside the source and endpoint-degenerate tangents.
+  for (const ArrowStyle style : styles) {
+    Annotation edge;
+    edge.kind = Annotation::Kind::Arrow;
+    edge.start = {10, 20};
+    edge.end = {190, 20};
+    edge.size = 12;
+    edge.arrowStyle = style;
+    edge.curveControl = QPointF(100, -180);
+    const QRectF visual = arrowVisualBounds(edge);
+    if (!captureCanvasRect(QSizeF(200, 100), {edge}).contains(visual)) {
+      error = QStringLiteral("Canvas clipped styled arrow geometry");
+      return false;
+    }
+    if (style == ArrowStyle::Curved || style == ArrowStyle::Double) {
+      edge.curveControl = edge.end;
+      if (arrowVisualBounds(edge).height() < 10) {
+        error = QStringLiteral("Endpoint control removed the arrow head");
+        return false;
+      }
+      if (style == ArrowStyle::Double) {
+        edge.curveControl = edge.start;
+        if (arrowVisualBounds(edge).height() < 10) {
+          error = QStringLiteral("Endpoint control removed the double head");
+          return false;
+        }
+      }
+    }
+  }
   const auto exactArrowIcon = [](ArrowStyle style) {
     QImage image(36, 36, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
