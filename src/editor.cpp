@@ -3424,22 +3424,33 @@ void CaptureEditor::ensureTextEditor() {
           widestLine, metrics.horizontalAdvance(line + QStringLiteral("  ")));
     const int sidePadding =
         textEditPill_ ? qRound(std::max(4.0, metrics.height() * 0.18)) : 0;
-    const qreal remaining = canvasRect_.right() - textPoint_.x();
-    const int desiredWidth = textEditWrapWidth_ > 0.0
-        ? std::max(1, qRound(textEditWrapWidth_ * editScale())) + sidePadding * 2
-        : std::max(48, widestLine + sidePadding * 2);
+    const bool newOffCanvasText =
+        editingAnnotation_ < 0 &&
+        canvasBoundaryMode_ != CanvasBoundaryMode::Image &&
+        !canvasRect_.contains(textPoint_);
+    const int desiredWidth =
+        textEditWrapWidth_ > 0.0
+            ? std::max(1, qRound(textEditWrapWidth_ * editScale())) +
+                  sidePadding * 2
+            : std::max(48, widestLine + sidePadding * 2);
     // Match the committed layout's image-space minimum. A draft with too
     // little room stays unbounded and grows the canvas when committed.
-    const int width = textEditWrapWidth_ <= 0.0 &&
-                              remaining >= kMinimumTextWrapWidth
-                          ? std::min(desiredWidth,
-                                     qRound(remaining * editScale()) + sidePadding * 2)
-                          : desiredWidth;
+    // A new label in the surround sizes to the workspace edge instead of
+    // the source frame, which does not contain the caret.
+    const qreal remaining = canvasRect_.right() - textPoint_.x();
+    int width = !newOffCanvasText && textEditWrapWidth_ <= 0.0 &&
+                        remaining >= kMinimumTextWrapWidth
+                    ? std::min(desiredWidth, qRound(remaining * editScale()) +
+                                                 sidePadding * 2)
+                    : desiredWidth;
+    if (newOffCanvasText) {
+      const int room = std::max(
+          48, qRound(annotationWorkspaceRect().right() - textEditor_->x()));
+      width = std::min(std::max(width, 48), room);
+    }
     textEditor_->resize(width, textEditor_->height());
-    // QPlainTextEdit needs a little more than QFontMetrics::height(): its
-    // block layout keeps leading/descent outside the nominal line box.
-    // Wrapped lines are not the newline count either, so the laid-out
-    // document is the only thing that knows how tall the draft is now.
+    // Wrapped lines are not the newline count, so the laid-out document is
+    // the only thing that knows how tall the draft is now.
     const int wrapped =
         std::max(1, qRound(textEditor_->document()->size().height()));
     const int desiredHeight =
