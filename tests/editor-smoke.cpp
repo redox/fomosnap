@@ -4582,6 +4582,29 @@ bool runOffCanvasCreationSmoke(QApplication &application, QString &error) {
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
 
+  const QPoint rightOutside(qRound(initialImage.right() + 40), outside.y());
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, rightOutside);
+  textEditor = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+  if (!textEditor) {
+    error = QStringLiteral("Right-side workspace did not start a text draft");
+    return false;
+  }
+  QTest::keyClicks(textEditor, QStringLiteral("Right-side note"));
+  application.processEvents();
+  if (textEditor->width() <= 150 ||
+      textEditor->horizontalScrollBar()->maximum() != 0) {
+    error = QStringLiteral("Right-side off-canvas draft was clipped while typing");
+    return false;
+  }
+  QTest::keyClick(textEditor, Qt::Key_Return, Qt::ControlModifier);
+  if (editor.currentAnnotationsForTest().size() != 1 ||
+      editor.currentCanvasForTest().right() <= sourceCanvas.right()) {
+    error = QStringLiteral("Right-side text did not grow the canvas");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  application.processEvents();
+
   // Screenshot-derived operations have nothing meaningful to do in the
   // surround, and the narrow band occupied by editor chrome is never canvas.
   QTest::keyClick(&editor, Qt::Key_D);
