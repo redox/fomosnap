@@ -2324,16 +2324,17 @@ QPointF CaptureEditor::sourcePoint(const QPointF &logicalPoint) const {
 void CaptureEditor::scheduleHighlighterProbe(
     const QPointF &annotationPoint) {
   pendingHighlighterProbePoint_ = annotationPoint;
-  if (highlighterProbeWatcher_.isRunning())
-    return;
   if (capture_.source.isNull() || capture_.previewSize.isEmpty() ||
       !QRectF(QPointF(), selection_.size()).contains(annotationPoint)) {
+    ++highlighterProbeGeneration_;
     pendingHighlighterProbePoint_.reset();
     highlighterPreview_.reset();
     highlighterPreviewPoint_.reset();
     return;
   }
 
+  if (highlighterProbeWatcher_.isRunning())
+    return;
   const QPointF probePoint = *pendingHighlighterProbePoint_;
   pendingHighlighterProbePoint_.reset();
   const quint64 generation = ++highlighterProbeGeneration_;
@@ -2370,7 +2371,8 @@ void CaptureEditor::completeHighlighterProbe() {
   const HighlighterProbeResult result = highlighterProbeWatcher_.result();
   if (result.generation == highlighterProbeGeneration_ &&
       phase_ == Phase::Edit && tool_ == Tool::Highlighter &&
-      highlighterMode_ == HighlighterMode::Snap && !dragging_) {
+      highlighterMode_ == HighlighterMode::Snap && !dragging_ &&
+      sourceFrameWidgetRect().contains(cursor_)) {
     const QRegion oldVisual = pointerMotionRegion(cursor_);
     highlighterPreview_ = result.lock;
     highlighterPreviewPoint_ = result.annotationPoint;
@@ -5308,7 +5310,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
       QPointF strokeStart = point;
       if (tool_ == Tool::Highlighter &&
           highlighterMode_ == HighlighterMode::Snap && highlighterPreview_ &&
-          highlighterPreviewPoint_ &&
+          highlighterPreviewPoint_ && sourceFrameWidgetRect().contains(cursor_) &&
           QLineF(*highlighterPreviewPoint_, point).length() <= 24.0)
         highlighterLock_ = highlighterPreview_;
       if (highlighterLock_)
@@ -5880,7 +5882,7 @@ void CaptureEditor::updatePointerCursor() {
       if (dragging_) {
         highlighterPreview_ = highlighterLock_;
         highlighterPreviewPoint_.reset();
-      } else if (canStartAnnotationAt(cursor_)) {
+      } else if (sourceFrameWidgetRect().contains(cursor_)) {
         scheduleHighlighterProbe(toUnclampedAnnotationPoint(cursor_));
       } else {
         clearHighlighterPreview();
