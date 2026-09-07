@@ -705,6 +705,56 @@ bool runTextAwareHighlighterEditorCheck(QApplication &application,
   paintTextLikeBand(capture.source, textBand, sourceScale,
                     QColor(QStringLiteral("#d8dbe2")));
 
+  {
+    CaptureData edgeCapture = capture;
+    edgeCapture.source = capture.source.copy();
+    paintTextLikeBand(edgeCapture.source, QRectF(2, 96, 149, 16), sourceScale,
+                      QColor(QStringLiteral("#d8dbe2")));
+    CaptureEditor edge(edgeCapture, CaptureEditor::CaptureMode::Fullscreen);
+    edge.setSuppressSnapshots(true);
+    edge.resize(700, 500);
+    edge.show();
+    application.processEvents();
+    QTest::keyClick(&edge, Qt::Key_H);
+    const auto move = [&](const QPointF &point) {
+      const QPointF at = edge.annotationPointToWidgetForTest(point);
+      QMouseEvent event(QEvent::MouseMove, at, edge.mapToGlobal(at.toPoint()),
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(&edge, &event);
+    };
+    move({5, 104});
+    for (int attempt = 0; attempt < 200 && edge.highlighterPreviewRectForTest().isEmpty(); ++attempt)
+      QTest::qWait(5);
+    if (edge.highlighterPreviewRectForTest().isEmpty()) {
+      error = QStringLiteral("Edge highlighter fixture did not find its text band");
+      return false;
+    }
+    // Queue a source probe, then leave before its finished signal can apply.
+    move({6, 105});
+    move({-5, 110});
+    if (!edge.highlighterPreviewRectForTest().isEmpty() ||
+        edge.cursor().shape() != Qt::CrossCursor) {
+      error = QStringLiteral("Off-canvas highlighter retained a source preview");
+      return false;
+    }
+    QTest::qWait(30);
+    if (!edge.highlighterPreviewRectForTest().isEmpty()) {
+      error = QStringLiteral("An old probe restored the off-canvas preview");
+      return false;
+    }
+    const QPoint from = edge.annotationPointToWidgetForTest({-5, 110}).toPoint();
+    const QPoint to = edge.annotationPointToWidgetForTest({50, 140}).toPoint();
+    QTest::mousePress(&edge, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(&edge, to, 10);
+    QTest::mouseRelease(&edge, Qt::LeftButton, Qt::NoModifier, to);
+    if (edge.currentAnnotationsForTest().isEmpty() ||
+        std::abs(edge.currentAnnotationsForTest().constFirst().points.first().y() - 110) > 1 ||
+        std::abs(edge.currentAnnotationsForTest().constFirst().points.last().y() - 140) > 1) {
+      error = QStringLiteral("Off-canvas highlighter locked to a stale text row");
+      return false;
+    }
+  }
+
   CaptureEditor editor(capture, CaptureEditor::CaptureMode::Fullscreen);
   editor.setSuppressSnapshots(true);
   // baseImageRect is exactly 400x240 at (30,135), making test gestures map
