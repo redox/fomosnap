@@ -220,8 +220,10 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
 
     QRectF bounds(annotation.start, annotation.end);
     bounds = bounds.normalized();
-    if (annotation.kind == Annotation::Kind::Arrow)
-      return arrowVisualBounds(annotation).adjusted(-1, -1, 1, 1);
+    if (annotation.kind == Annotation::Kind::Arrow) {
+      const QRectF visual = arrowVisualBounds(annotation);
+      return visual.isEmpty() ? QRectF() : visual.adjusted(-1, -1, 1, 1);
+    }
     qreal extent = 1.0;
     if (annotation.kind == Annotation::Kind::Line ||
         annotation.kind == Annotation::Kind::Arrow ||

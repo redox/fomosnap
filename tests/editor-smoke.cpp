@@ -8679,6 +8679,21 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
       }
     }
   }
+  for (const ArrowStyle style : styles) {
+    Annotation collapsed;
+    collapsed.kind = Annotation::Kind::Arrow;
+    collapsed.arrowStyle = style;
+    collapsed.start = {80, 50};
+    collapsed.end = {80.5, 50};
+    for (const CanvasBoundaryMode boundary :
+         {CanvasBoundaryMode::Framed, CanvasBoundaryMode::Overflow}) {
+      if (captureCanvasRect(QSizeF(200, 100), {collapsed}, boundary) !=
+          QRectF(0, 0, 200, 100)) {
+        error = QStringLiteral("An invisible collapsed arrow grew the canvas");
+        return false;
+      }
+    }
+  }
   const auto exactArrowIcon = [](ArrowStyle style) {
     QImage image(36, 36, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::transparent);
