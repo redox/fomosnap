@@ -3424,16 +3424,17 @@ void CaptureEditor::ensureTextEditor() {
           widestLine, metrics.horizontalAdvance(line + QStringLiteral("  ")));
     const int sidePadding =
         textEditPill_ ? qRound(std::max(4.0, metrics.height() * 0.18)) : 0;
-    const int availableWidth =
-        std::max(48, qRound(editImageRect().right()) - textEditor_->x() +
-                         sidePadding);
-    // A dragged wrap width wins; otherwise the text wraps at the canvas
-    // edge rather than running off it, where its handle is unreachable.
-    const int desiredWidth =
-        textEditWrapWidth_ > 0.0
-            ? std::max(48, qRound(textEditWrapWidth_ * editScale()) + sidePadding * 2)
-            : std::max(48, widestLine + sidePadding * 2);
-    const int width = std::min(desiredWidth, availableWidth);
+    const qreal remaining = canvasRect_.right() - textPoint_.x();
+    const int desiredWidth = textEditWrapWidth_ > 0.0
+        ? std::max(1, qRound(textEditWrapWidth_ * editScale())) + sidePadding * 2
+        : std::max(48, widestLine + sidePadding * 2);
+    // Match the committed layout's image-space minimum. A draft with too
+    // little room stays unbounded and grows the canvas when committed.
+    const int width = textEditWrapWidth_ <= 0.0 &&
+                              remaining >= kMinimumTextWrapWidth
+                          ? std::min(desiredWidth,
+                                     qRound(remaining * editScale()) + sidePadding * 2)
+                          : desiredWidth;
     textEditor_->resize(width, textEditor_->height());
     // QPlainTextEdit needs a little more than QFontMetrics::height(): its
     // block layout keeps leading/descent outside the nominal line box.
@@ -4754,7 +4755,9 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
                                     : 0.0;
           annotation.textWidth = std::max<qreal>(
               kMinimumTextWrapWidth,
-              point.x() - originalBounds.left() - 2.0 * padding);
+              originalAnnotation_.textWidth > 0.0
+                  ? originalAnnotation_.textWidth + point.x() - dragStart_.x()
+                  : point.x() - originalBounds.left() - 2.0 * padding);
         }
       } else if (interaction_ == Interaction::ResizeControl &&
                  annotation.kind == Annotation::Kind::Arrow &&

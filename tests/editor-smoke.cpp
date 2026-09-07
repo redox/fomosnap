@@ -1886,6 +1886,34 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   capture.source.fill(QColor(QStringLiteral("#182030")));
   capture.previewSize = capture.source.size();
 
+  for (const int widgetWidth : {1000, 500}) {
+    CaptureEditor draft(capture, CaptureEditor::CaptureMode::Fullscreen);
+    draft.setSuppressSnapshots(true);
+    draft.resize(widgetWidth, 900);
+    draft.show();
+    application.processEvents();
+    QTest::keyClick(&draft, Qt::Key_T);
+    const QPoint at = draft.annotationPointToWidgetForTest(QPointF(775, 180)).toPoint();
+    QTest::mouseClick(&draft, Qt::LeftButton, Qt::NoModifier, at);
+    auto *input = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+    if (!input) {
+      error = QStringLiteral("Near-edge text fixture did not start a draft");
+      return false;
+    }
+    QTest::keyClicks(input, QStringLiteral("near the right edge"));
+    application.processEvents();
+    if (input->document()->size().height() > 1.0) {
+      error = QStringLiteral("An unbounded near-edge draft wrapped at a screen-pixel floor");
+      return false;
+    }
+    QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+    if (draft.currentAnnotationsForTest().size() != 1 ||
+        draft.currentAnnotationsForTest().constFirst().textWidth != 0.0) {
+      error = QStringLiteral("Near-edge text changed its wrap rule on commit");
+      return false;
+    }
+  }
+
   const QRectF selection(100, 100, 550, 370);
   const qreal ascent = QFontMetricsF(annotationTextFont(5.0)).ascent();
   Annotation text;
@@ -1945,7 +1973,20 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
     return false;
   }
 
-  const int operationsBefore = editor.operationLog().size();
+  // A tiny drag adjusts the stored constraint, even when the widest line
+  // is noticeably narrower than that constraint.
+  const qreal scaleBefore = editor.editScaleForTest();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handleSpot);
+  QTest::mouseMove(&editor, handleSpot + QPoint(3, 0), 20);
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      handleSpot + QPoint(3, 0));
+  const qreal resizedWidth = editor.currentAnnotationsForTest().constFirst().textWidth;
+  if (std::abs(resizedWidth - (text.textWidth + 3.0 / scaleBefore)) > 0.5) {
+    error = QStringLiteral("A small text handle drag snapped its wrap width");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+  const int operationsBefore = editor.operationIndex();
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handleSpot);
   const QPoint wayRight(std::min(editor.width() - 2, handleSpot.x() + 70),
                         handleSpot.y());
@@ -1953,7 +1994,7 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, wayRight);
   application.processEvents();
   const QVector<Operation> &operations = editor.operationLog();
-  if (operations.size() != operationsBefore + 1 ||
+  if (editor.operationIndex() != operationsBefore + 1 ||
       operations.constLast().type != Operation::Type::Patch ||
       operations.constLast().annotations.size() != 1 ||
       operations.constLast().annotations.constFirst().textWidth <=
