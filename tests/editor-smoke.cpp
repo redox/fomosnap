@@ -23,6 +23,8 @@
 #include "icons.hpp"
 
 #include <QApplication>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QBuffer>
 #include <QCursor>
 #include <QDebug>
@@ -1936,6 +1938,63 @@ bool runTextOverrunHandleCheck(QApplication &application, QString &error) {
   log.ops.push_back(std::move(annotate));
   log.index = log.ops.size();
   log.nextId = 2;
+
+  for (const int width : {570, 420}) {
+    Annotation label = text;
+    label.start = {30, 90 + ascent};
+    label.text = QStringLiteral("the quick brown fox jumps over the lazy dog");
+    label.textBackground = TextBackground::Pill;
+    Operation op;
+    op.type = Operation::Type::Annotate;
+    op.annotations = {label};
+    OperationLog fractionalLog{{op}, 1, 2, 1, capture.previewSize};
+    CaptureEditor fractional(capture, CaptureEditor::CaptureMode::File,
+                              QuickOutputMode::None, fractionalLog);
+    fractional.setSuppressSnapshots(true);
+    fractional.resize(width, 900);
+    fractional.show();
+    application.processEvents();
+    QTest::mouseClick(&fractional, Qt::LeftButton, Qt::NoModifier,
+                      fractional.annotationPointToWidgetForTest(
+                          annotationTextBounds(label).center()).toPoint());
+    QTest::keyClick(&fractional, Qt::Key_Return);
+    auto *input = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+    if (!input) {
+      error = QStringLiteral("Fractional wrapped text did not reopen");
+      return false;
+    }
+    application.processEvents();
+    QStringList draftLines;
+    for (QTextBlock block = input->document()->begin(); block.isValid(); block = block.next()) {
+      QTextLayout *layout = block.layout();
+      for (int line = 0; line < layout->lineCount(); ++line) {
+        const QTextLine visual = layout->lineAt(line);
+        draftLines.push_back(block.text().mid(visual.textStart(), visual.textLength()));
+      }
+    }
+    if (draftLines != annotationTextLines(label) || input->toPlainText() != label.text) {
+      error = QStringLiteral("Fractional draft wrapping diverged from the logical layout");
+      return false;
+    }
+    const auto cream = [](const QImage &image) {
+      QRect bounds;
+      for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+          if (image.pixelColor(x, y) == QColor(248, 245, 235))
+            bounds |= QRect(x, y, 1, 1);
+      return bounds;
+    };
+    const QRect draftPill = cream(fractional.grab().toImage());
+    QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+    application.processEvents();
+    const QRect committedPill = cream(fractional.grab().toImage());
+    if (draftPill.isEmpty() ||
+        (draftPill.topLeft() - committedPill.topLeft()).manhattanLength() > 2 ||
+        (draftPill.bottomRight() - committedPill.bottomRight()).manhattanLength() > 2) {
+      error = QStringLiteral("Fractional text pill moved on commit");
+      return false;
+    }
+  }
 
   CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
                        QuickOutputMode::None, log);
