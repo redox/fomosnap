@@ -458,9 +458,10 @@ without reaching for the pointer.
 | `Esc` | Dismiss (while selecting; in the editor, `Esc` returns to Select and a second `Esc` closes) |
 
 Region memory is stored in FOMOsnap's private runtime directory. It survives
-closing and reopening FOMOsnap, but is cleared with the login session's runtime
-files. A region from another monitor, a different overlay size, or outside the
-current screen is ignored; draw a new region after changing the display layout.
+closing and reopening FOMOsnap and lasts until those runtime files are removed
+(normally when the login session ends). A region from another monitor, a
+different overlay size, or outside the current screen is ignored; draw a new
+region after changing the display layout.
 
 ### Annotation editor
 
