@@ -6229,7 +6229,12 @@ void CaptureEditor::adoptStitched(const QImage &image) {
   }
   const bool veryLong = image.width() > stitch::kWidelyOpenableEdge ||
                         image.height() > stitch::kWidelyOpenableEdge;
-  adoptImage(image, OperationLog(), SelectTab::Scroll,
+  // Stitching produces native pixels; retain the monitor's logical size
+  // through the same document metadata used when reopening a pinned capture.
+  OperationLog log;
+  log.previewSize =
+      (QSizeF(image.size()) / std::max<qreal>(1.0, liveMonitor_.scale)).toSize();
+  adoptImage(image, std::move(log), SelectTab::Scroll,
              veryLong
                  ? QStringLiteral("Very long capture (%1 × %2) · edits and "
                                   "saves here as usual, but many apps cannot "

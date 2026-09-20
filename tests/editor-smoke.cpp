@@ -1251,6 +1251,224 @@ bool runPointerDamageRegionCheck(QString &error) {
   return true;
 }
 
+bool runScrollScaleChecks(QString &error) {
+  const QSize logicalSize(300, 500);
+  for (const qreal scale : {1.0, 1.25, 1.5, 2.0}) {
+    CaptureData capture;
+    capture.monitor.geometry = {0, 0, 800, 600};
+    capture.monitor.pixelSize = (QSizeF(800, 600) * scale).toSize();
+    capture.monitor.scale = scale;
+    capture.previewSize = {800, 600};
+    capture.source = QImage(capture.monitor.pixelSize, QImage::Format_ARGB32_Premultiplied);
+    capture.source.fill(Qt::white);
+    // Stitch offsets can leave a native row that is not a whole logical
+    // pixel. Reopening and saving must retain that row without resampling.
+    for (const QSize extra : {QSize(0, 0), QSize(0, 1), QSize(1, 1)}) {
+      QImage stitched((QSizeF(logicalSize) * scale).toSize() + extra,
+                      QImage::Format_ARGB32_Premultiplied);
+      stitched.fill(Qt::white);
+      for (int x = 0; x < stitched.width(); ++x)
+        stitched.setPixelColor(x, stitched.height() - 1, Qt::red);
+      const QSize expectedLogical = logicalSize + extra;
+      CaptureEditor editor(capture, CaptureEditor::CaptureMode::Scroll);
+      editor.setSuppressSnapshots(true);
+      editor.resize(1200, 1200);
+      editor.adoptStitchedForTest(stitched);
+      if (editor.captureData().previewSize != expectedLogical ||
+          editor.captureData().source != stitched || editor.renderCurrentOutput() != stitched) {
+        error = QStringLiteral("Stitched capture lost its logical size or native pixels at scale %1")
+                    .arg(scale);
+        return false;
+      }
+
+      OperationLog log;
+      log.previewSize = expectedLogical;
+      CaptureData reopened;
+      describeFileCapture(reopened, stitched, log);
+      CaptureEditor fromPin(reopened, CaptureEditor::CaptureMode::File);
+      fromPin.setSuppressSnapshots(true);
+      fromPin.resize(1200, 1200);
+      if (editor.sourceFrameWidgetRectForTest().size() != QSizeF(expectedLogical) ||
+          fromPin.sourceFrameWidgetRectForTest() != editor.sourceFrameWidgetRectForTest() ||
+          fromPin.renderCurrentOutput() != stitched) {
+        error = QStringLiteral("A reopened scrolling pin changed size or pixels at scale %1")
+                    .arg(scale);
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool runPostCaptureChecks(QString &error) {
+  if (!runScrollScaleChecks(error))
+    return false;
+  QTemporaryDir directory;
+  if (!directory.isValid())
+    return false;
+  const QString clipboard = directory.filePath(QStringLiteral("clipboard.png"));
+  const auto executable = [&](const QString &name, const QByteArray &script) {
+    QFile file(directory.filePath(name));
+    if (!file.open(QIODevice::WriteOnly) || file.write(script) != script.size())
+      return false;
+    file.close();
+    return file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner |
+                                QFileDevice::ExeOwner);
+  };
+  if (!executable(QStringLiteral("wl-copy"), QByteArrayLiteral(
+          "#!/bin/sh\n"
+          "if [ -n \"$OMASNAP_TEST_COPY_FAIL\" ]; then echo unavailable >&2; exit 1; fi\n"
+          "cat > \"$OMASNAP_TEST_PIN_CLIPBOARD\"\n")) ||
+      !executable(QStringLiteral("wl-paste"), QByteArrayLiteral(
+          "#!/bin/sh\ncat \"$OMASNAP_TEST_PIN_CLIPBOARD\"\n")))
+    return false;
+  const QByteArray oldPath = qgetenv("PATH");
+  const QByteArray oldClipboard = qgetenv("OMASNAP_TEST_PIN_CLIPBOARD");
+  const QByteArray oldFailure = qgetenv("OMASNAP_TEST_COPY_FAIL");
+  const auto restore = qScopeGuard([&] {
+    qputenv("PATH", oldPath);
+    oldClipboard.isNull() ? qunsetenv("OMASNAP_TEST_PIN_CLIPBOARD")
+                          : qputenv("OMASNAP_TEST_PIN_CLIPBOARD", oldClipboard);
+    oldFailure.isNull() ? qunsetenv("OMASNAP_TEST_COPY_FAIL")
+                        : qputenv("OMASNAP_TEST_COPY_FAIL", oldFailure);
+  });
+  qputenv("PATH", directory.path().toUtf8() + ':' + oldPath);
+  qputenv("OMASNAP_TEST_PIN_CLIPBOARD", clipboard.toUtf8());
+  qunsetenv("OMASNAP_TEST_COPY_FAIL");
+
+  CaptureData capture;
+  capture.monitor.geometry = {0, 0, 800, 600};
+  capture.monitor.pixelSize = {1600, 1200};
+  capture.monitor.scale = 2;
+  capture.source = QImage(1600, 1200, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#345678")));
+  capture.previewSize = {800, 600};
+  capture.windows = {{QRect(100, 100, 300, 200), QStringLiteral("window"),
+                       QStringLiteral("fixture"), QStringLiteral("test")}};
+
+  using Mode = CaptureEditor::CaptureMode;
+  for (const Mode mode : {Mode::Region, Mode::Smart, Mode::Window,
+                          Mode::Fullscreen, Mode::Scroll}) {
+    CaptureEditor editor(capture, mode, QuickOutputMode::CopyAndPreview);
+    QString pin;
+    bool launchedOnWorker = false;
+    editor.setProcessLauncherForTest([&](const QString &, const QStringList &args) {
+      launchedOnWorker = QThread::currentThread() != qApp->thread();
+      if (args.size() != 2 || args.first() != QStringLiteral("--preview"))
+        return false;
+      pin = args.last();
+      return true;
+    });
+    editor.resize(800, 600);
+    editor.show();
+    if (mode == Mode::Region) {
+      QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, {100, 100});
+      QTest::mouseMove(&editor, {400, 300});
+      QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, {400, 300});
+    } else if (mode == Mode::Smart || mode == Mode::Window) {
+      QTest::mouseMove(&editor, {200, 180});
+      QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, {200, 180});
+    } else if (mode == Mode::Scroll) {
+      QImage stitched(800, 2400, QImage::Format_ARGB32_Premultiplied);
+      stitched.fill(Qt::cyan);
+      editor.adoptStitchedForTest(stitched);
+    }
+    const QSize logicalSize = mode == Mode::Fullscreen ? QSize(800, 600)
+                              : mode == Mode::Scroll ? QSize(400, 1200)
+                                                     : QSize(300, 200);
+    if (editor.currentSelection().size().toSize() != logicalSize) {
+      error = QStringLiteral("Post-capture output lost the monitor's logical size (mode %1)")
+                  .arg(static_cast<int>(mode));
+      return false;
+    }
+    const QImage expected = editor.renderCurrentOutput();
+    if (!editor.exportingForTest() || editor.editingForTest()) {
+      error = QStringLiteral("Fresh capture opened the editor instead of outputting");
+      return false;
+    }
+    editor.waitForExport();
+    const auto cleanup = qScopeGuard([&] {
+      QFile::remove(pin);
+      QFile::remove(operationLogPath(pin));
+    });
+    OperationLog log;
+    if (editor.isVisible() || pin.isEmpty() || !launchedOnWorker ||
+        QImage(pin).convertToFormat(expected.format()) != expected ||
+        QImage(clipboard).convertToFormat(expected.format()) != expected ||
+        !loadOperationLog(operationLogPath(pin), log, error) ||
+        log.previewSize != logicalSize) {
+      error = QStringLiteral("Post-capture output lost pixels, scale, or async pin launch (mode %1)")
+                  .arg(static_cast<int>(mode));
+      return false;
+    }
+  }
+  // Explicit pinning stays on screen, including a text draft committed by
+  // Ctrl+P before the renderer takes its snapshot.
+  for (const bool textDraft : {false, true}) {
+    CaptureEditor editor(capture, Mode::File);
+    editor.setSuppressSnapshots(true);
+    QString pin;
+    editor.setProcessLauncherForTest([&](const QString &, const QStringList &args) {
+      if (args.size() != 2 || args.first() != QStringLiteral("--pin"))
+        return false;
+      pin = args.last();
+      return true;
+    });
+    editor.resize(800, 600);
+    editor.show();
+    if (textDraft) {
+      editor.activateWindow();
+      QApplication::processEvents();
+      QTest::keyClick(&editor, Qt::Key_T);
+      QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                         editor.editImageRectForTest().center().toPoint());
+      auto *draft = qobject_cast<QPlainTextEdit *>(QApplication::focusWidget());
+      if (!draft) {
+        error = QStringLiteral("Pin fixture could not open a text draft");
+        return false;
+      }
+      QTest::keyClicks(draft, QStringLiteral("Keep this annotation"));
+      QTest::keyClick(draft, Qt::Key_P, Qt::ControlModifier);
+    } else {
+      QTest::keyClick(&editor, Qt::Key_P, Qt::ControlModifier);
+    }
+    for (int attempt = 0; attempt < 500 && editor.isVisible(); ++attempt)
+      QTest::qWait(10);
+    const auto cleanup = qScopeGuard([&] {
+      QFile::remove(pin);
+      QFile::remove(operationLogPath(pin));
+    });
+    if (editor.isVisible() || pin.isEmpty() ||
+        (textDraft && editor.annotationCountForTest() != 1)) {
+      error = QStringLiteral("Ctrl+P did not keep the capture or lost its text draft");
+      return false;
+    }
+  }
+  // Failures preserve the captured pixels in an editable recovery surface
+  // and leave no abandoned pin document. Clipboard failure never launches.
+  for (const bool clipboardFailure : {true, false}) {
+    qputenv("OMASNAP_TEST_COPY_FAIL", clipboardFailure ? "1" : "");
+    const QDir runtime(secureRuntimeDirectory());
+    const auto before = runtime.entryList({QStringLiteral("pin-*")}, QDir::Files);
+    CaptureEditor editor(capture, Mode::Fullscreen, QuickOutputMode::CopyAndPreview);
+    bool launchCalled = false;
+    editor.setProcessLauncherForTest([&](const QString &, const QStringList &) {
+      launchCalled = true;
+      return false;
+    });
+    editor.show();
+    editor.waitForExport();
+    if (!editor.isVisible() || !editor.editingForTest() ||
+        launchCalled == clipboardFailure ||
+        runtime.entryList({QStringLiteral("pin-*")}, QDir::Files) != before) {
+      error = QStringLiteral("Post-capture failure lost recovery or leaked a pin");
+      return false;
+    }
+    editor.close();
+  }
+  return true;
+}
+
 bool runQuickOutputChecks(QString &error) {
   QImage image(32, 24, QImage::Format_ARGB32_Premultiplied);
   image.fill(QColor(QStringLiteral("#345678")));
