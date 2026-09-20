@@ -52,6 +52,8 @@ global hotkey were rewritten against macOS frameworks.
   mesh-gradient backdrops, and rendered drop shadows on standard backdrop cards.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
+  Moving or resizing an existing layer suspends the armed tool's action until
+  release, then leaves the tool ready for the next canvas gesture.
 - Pin a finished capture as a bottom-right always-on-top window, launched
   from the same `fomosnap` executable and visible on every Space.
 - Crash-resistant working documents under a private
