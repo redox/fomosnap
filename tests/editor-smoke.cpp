@@ -7872,6 +7872,155 @@ bool runLineHandleLegendSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** A layer grab owns the gesture, even while a different tool is armed. */
+bool runLayerDragSuppressesTool(QApplication &application, QString &error) {
+  using Tool = CaptureEditor::Tool;
+  const struct {
+    Qt::Key key;
+    Tool tool;
+    const char *name;
+  } tools[] = {{Qt::Key_X, Tool::Cut, "Cut"},
+               {Qt::Key_A, Tool::Arrow, "Arrow"},
+               {Qt::Key_L, Tool::Line, "Line"},
+               {Qt::Key_F, Tool::Freehand, "Pen"},
+               {Qt::Key_H, Tool::Highlighter, "Highlighter"},
+               {Qt::Key_S, Tool::Spotlight, "Spotlight"},
+               {Qt::Key_R, Tool::Rectangle, "Rectangle"},
+               {Qt::Key_E, Tool::Ellipse, "Ellipse"},
+               {Qt::Key_D, Tool::Redact, "Redact"},
+               {Qt::Key_T, Tool::Text, "Text"},
+               {Qt::Key_C, Tool::Marker, "Marker"}};
+  CaptureData capture;
+  const QColor background(QStringLiteral("#182030"));
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(500, 320, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(background);
+  capture.previewSize = capture.source.size();
+  for (const auto &armed : tools) {
+    Annotation layer;
+    layer.id = 1;
+    layer.kind = armed.tool == Tool::Marker ? Annotation::Kind::Marker
+                                            : Annotation::Kind::Arrow;
+    layer.start = armed.tool == Tool::Marker ? QPointF(130, 80) : QPointF(80, 80);
+    layer.end = {180, 80};
+    layer.color = QColor(QStringLiteral("#ff375f"));
+    layer.size = 4;
+    layer.number = 1;
+    Operation annotate;
+    annotate.type = Operation::Type::Annotate;
+    annotate.annotations = {layer};
+    OperationLog log;
+    log.ops = {annotate};
+    log.index = 1;
+    log.nextId = 2;
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                         QuickOutputMode::None, log);
+    editor.setSuppressSnapshots(true);
+    editor.resize(900, 700);
+    editor.show();
+    application.processEvents();
+    const auto widgetPoint = [&](const QPointF &point) {
+      return editor.annotationPointToWidgetForTest(point).toPoint();
+    };
+    const auto untouchedCanvas = [&] {
+      const QImage ui = editor.grab().toImage();
+      // These points catch both an accidental cut band from the origin and
+      // a drawing preview between the press and the moved pointer.
+      for (const QPointF point : {QPointF(40, 40), QPointF(160, 105),
+                                  QPointF(130, 100)}) {
+        if (!colorNear(grabLogicalPixel(ui, editor, widgetPoint(point)),
+                       background, 2)) {
+          error = QStringLiteral("%1 painted its tool preview during a layer grab")
+                      .arg(QString::fromLatin1(armed.name));
+          return false;
+        }
+      }
+      return true;
+    };
+    const QImage before = editor.renderCurrentOutput();
+    const int history = editor.operationIndex();
+    QTest::keyClick(&editor, armed.key);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                       widgetPoint({130, 80}));
+    QTest::mouseMove(&editor, widgetPoint({190, 130}), 20);
+    application.processEvents();
+    if (!untouchedCanvas())
+      return false;
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                         widgetPoint({190, 130}));
+    application.processEvents();
+    if (!untouchedCanvas())
+      return false;
+    if (editor.currentAnnotationsForTest().size() != 1 ||
+        editor.currentAnnotationsForTest().constFirst().start !=
+            layer.start + QPointF(60, 50) ||
+        editor.captureData().source != capture.source ||
+        editor.operationIndex() != history + 1 ||
+        editor.operationLog().constLast().type != Operation::Type::Patch ||
+        editor.armedToolForTest() != armed.tool) {
+      error = QStringLiteral("%1 did not leave exactly one layer-move operation")
+                  .arg(QString::fromLatin1(armed.name));
+      return false;
+    }
+    const QImage moved = editor.renderCurrentOutput();
+    QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+    if (editor.renderCurrentOutput() != before) {
+      error = QStringLiteral("Undo did not restore the layer moved with %1 armed")
+                  .arg(QString::fromLatin1(armed.name));
+      return false;
+    }
+    QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+    if (editor.renderCurrentOutput() != moved)
+      return false;
+    if (armed.tool != Tool::Marker) {
+      // The selected arrow's end handle must also suppress the armed tool.
+      QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                         widgetPoint({240, 130}));
+      QTest::mouseMove(&editor, widgetPoint({300, 180}), 20);
+      application.processEvents();
+      if (!untouchedCanvas())
+        return false;
+      QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                           widgetPoint({300, 180}));
+      application.processEvents();
+      if (!untouchedCanvas())
+        return false;
+      const auto &resized = editor.currentAnnotationsForTest().constFirst();
+      if (editor.annotationCountForTest() != 1 ||
+          resized.start != QPointF(140, 130) || resized.end != QPointF(300, 180) ||
+          editor.operationIndex() != history + 2 ||
+          editor.operationLog().constLast().type != Operation::Type::Patch ||
+          editor.captureData().source != capture.source ||
+          editor.armedToolForTest() != armed.tool) {
+        error = QStringLiteral("%1 interfered with resizing an existing layer")
+                    .arg(QString::fromLatin1(armed.name));
+        return false;
+      }
+    }
+    if (armed.tool == Tool::Cut) {
+      // The tool remains usable: only a subsequent canvas drag removes pixels.
+      const QImage beforeCut = editor.renderCurrentOutput();
+      QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier,
+                         widgetPoint({50, 230}));
+      QTest::mouseMove(&editor, widgetPoint({50, 260}), 20);
+      QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                           widgetPoint({50, 260}));
+      if (editor.renderCurrentOutput().size() != QSize(500, 290) ||
+          editor.operationLog().constLast().type != Operation::Type::Cut) {
+        error = QStringLiteral("Cut did not resume after moving/resizing a layer");
+        return false;
+      }
+      QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+      if (editor.renderCurrentOutput() != beforeCut) {
+        error = QStringLiteral("Undoing the subsequent cut changed the layer edit");
+        return false;
+      }
+    }
+    editor.close();
+  }
+  return true;
+}
+
 /** Checks that a drawing tool moves the layer under its edge without losing
  *  the tool: adjust what is there, then keep drawing. */
 bool runHoverMoveSmoke(QApplication &application, QString &error) {
@@ -10034,7 +10183,8 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 120;
   }
-  if (!runHoverMoveSmoke(application, snapshotError)) {
+  if (!runLayerDragSuppressesTool(application, snapshotError) ||
+      !runHoverMoveSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 114;
   }

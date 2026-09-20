@@ -4868,7 +4868,10 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
       }
       dragChanged_ = true;
     }
-    if (tool_ == Tool::Cut && dragging_) {
+    // Moving or resizing a layer owns the gesture, even while a tool stays
+    // armed. Only a canvas drag may update that tool's in-progress action.
+    const bool drawing = dragging_ && interaction_ == Interaction::None;
+    if (tool_ == Tool::Cut && drawing) {
       QPointF point = toUnclampedAnnotationPoint(cursor_);
       point.setX(std::clamp(point.x(), 0.0, selection_.width()));
       point.setY(std::clamp(point.y(), 0.0, selection_.height()));
@@ -4916,8 +4919,7 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
             static_cast<int>(std::ceil(cutDragOriginOffset_ + hi));
       }
     }
-    if ((tool_ == Tool::Freehand || tool_ == Tool::Highlighter) && dragging_ &&
-        interaction_ == Interaction::None) {
+    if ((tool_ == Tool::Freehand || tool_ == Tool::Highlighter) && drawing) {
       QPointF point = toUnclampedAnnotationPoint(cursor_);
       if (tool_ == Tool::Highlighter && highlighterLock_)
         point.setY(highlighterLock_->centerY);
@@ -5378,6 +5380,7 @@ void CaptureEditor::mousePressEvent(QMouseEvent *event) {
     cutDragStart_ = point;
     cutDragActive_ = false;
     dragging_ = true;
+    interaction_ = Interaction::None;
   } else {
     dragStart_ = point;
     dragging_ = true;
@@ -7045,7 +7048,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     painter.setBrush(QColor(10, 132, 255, 38));
     painter.drawRect(marqueeRect_.normalized());
   }
-  if (cutDragActive_) {
+  if (cutDragActive_ && dragging_ && interaction_ == Interaction::None) {
     const qreal scale = std::max<qreal>(editScale(), 0.01);
     const QRectF band = liveCut_.orientation == Qt::Horizontal
                             ? QRectF(0, cutBandLo_, selection_.width(),
