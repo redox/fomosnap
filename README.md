@@ -55,6 +55,8 @@ global hotkey were rewritten against macOS frameworks.
   mesh-gradient backdrops, and rendered drop shadows on standard backdrop cards.
 - Dragging an arrow head, tail, or bend, or a line endpoint, hides the cursor
   and drag handles for precise placement. They return on release or cancellation.
+- A subtle dotted image boundary stays visible with every tool. Select mode
+  brightens it and shows crop handles when no annotation is selected.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
   Moving or resizing an existing layer suspends the armed tool's action until

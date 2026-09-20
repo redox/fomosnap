@@ -7618,8 +7618,8 @@ bool runSelectAllDeleteSmoke(QApplication &application, QString &error) {
 }
 
 /** A grown canvas keeps selection chrome on real layers only. Screenshot
- *  crop chrome disappears for both single- and multi-layer selections, then
- *  returns when the layers are put down. */
+ *  boundaries dim and crop handles disappear for single- and multi-layer
+ *  selections, then return to crop mode when the layers are put down. */
 bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
                                         QString &error) {
   CaptureData capture;
@@ -7757,8 +7757,9 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
     for (int y = region.top(); y <= region.bottom(); ++y) {
       for (int x = region.left(); x <= region.right(); ++x) {
         const QColor pixel = image.pixelColor(x, y);
-        if (pixel.blue() > 80 && pixel.blue() > pixel.red() + 50 &&
-            pixel.blue() > pixel.green() + 30)
+        // Include the dimmed boundary, but exclude the #182030 source pixels.
+        if (pixel.blue() > 55 && pixel.blue() > pixel.red() + 30 &&
+            pixel.blue() > pixel.green() + 15)
           ++bluePixels;
       }
     }
@@ -7787,9 +7788,10 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
              outerEdgeBottom + QPointF(3, 0))
           .normalized());
   if (blueChromeCount(idle, outerCanvasEdge) == 0 ||
-      blueChromeCount(selected, outerCanvasEdge) != 0) {
+      blueChromeCount(selected, outerCanvasEdge) == 0 ||
+      differenceCount(idle, selected, outerCanvasEdge) == 0) {
     error = QStringLiteral(
-        "Ctrl+A did not remove the grown-canvas selection perimeter");
+        "Ctrl+A did not preserve a dimmed grown-canvas boundary");
     return false;
   }
 
@@ -7814,9 +7816,9 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
       QRectF(QPointF(sourceFrame.right() - 3, sourceFrame.top() + 40),
              QPointF(sourceFrame.right() + 3, sourceFrame.top() + 180)));
   if (blueChromeCount(idle, sourceFrameEdge) == 0 ||
-      blueChromeCount(selected, sourceFrameEdge) != 0 ||
+      blueChromeCount(selected, sourceFrameEdge) == 0 ||
       differenceCount(idle, selected, sourceFrameEdge) == 0) {
-    error = QStringLiteral("Ctrl+A left the source-frame border selected");
+    error = QStringLiteral("Ctrl+A did not preserve a dimmed source boundary");
     return false;
   }
   const QRect cropHandle = imageRectForWidgetRect(
@@ -7828,7 +7830,7 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
     return false;
   }
 
-  // Putting the group down restores the source-frame border and crop handles.
+  // Putting the group down brightens the boundary and restores crop handles.
   QTest::mouseClick(
       &editor, Qt::LeftButton, Qt::NoModifier,
       editor.annotationPointToWidgetForTest({400, 50}).toPoint());
@@ -7843,7 +7845,7 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
     return false;
   }
 
-  // A single selected layer must hide the same screenshot chrome while
+  // A single selected layer must hide the same crop handles while
   // retaining that layer's own bounds and handles.
   QTest::mouseClick(
       &editor, Qt::LeftButton, Qt::NoModifier,
@@ -7854,8 +7856,9 @@ bool runGrownCanvasSelectAllChromeSmoke(QApplication &application,
     error = QStringLiteral("Single-layer chrome check did not select a layer");
     return false;
   }
-  if (blueChromeCount(single, sourceFrameEdge) != 0) {
-    error = QStringLiteral("Single selection left the source border visible");
+  if (blueChromeCount(single, sourceFrameEdge) == 0 ||
+      differenceCount(selected, single, sourceFrameEdge) != 0) {
+    error = QStringLiteral("Single selection lost the dimmed source boundary");
     return false;
   }
   if (brightChromeCount(single, cropHandle) != 0) {

@@ -7501,19 +7501,22 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   if (clipViewport)
     painter.restore();
 
-  // Screenshot chrome means "crop this source", not "this is another
-  // selected object". Keep it out of the layer-selection state entirely;
-  // clicking empty canvas puts the layers down and brings cropping back.
-  // This is deliberately above the viewport clip so zoomed chrome frames
-  // the part of the source and canvas that is actually visible.
-  if (tool_ == Tool::Select && selectedAnnotations_.isEmpty()) {
-    painter.setPen(QPen(QColor(QStringLiteral("#0a84ff")), 1, Qt::DashLine));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawRect(visibleImage.adjusted(-1, -1, 1, 1));
-    if (grown && !visibleSourceImage.isEmpty()) {
-      painter.setPen(QPen(QColor(10, 132, 255, 100), 1, Qt::DashLine));
-      painter.drawRect(visibleSourceImage);
-    }
+  // Keep the image boundary visible with every tool, and brighten it when
+  // cropping is available. Draw above the viewport clip to frame the visible
+  // portion when zoomed; crop handles still belong only to an empty selection.
+  const bool cropAvailable =
+      tool_ == Tool::Select && selectedAnnotations_.isEmpty();
+  painter.save();
+  painter.setOpacity(cropAvailable ? 1.0 : 0.6);
+  painter.setPen(QPen(QColor(QStringLiteral("#0a84ff")), 1, Qt::DashLine));
+  painter.setBrush(Qt::NoBrush);
+  painter.drawRect(visibleImage.adjusted(-1, -1, 1, 1));
+  if (grown && !visibleSourceImage.isEmpty()) {
+    painter.setPen(QPen(QColor(10, 132, 255, 100), 1, Qt::DashLine));
+    painter.drawRect(visibleSourceImage);
+  }
+  painter.restore();
+  if (cropAvailable) {
     painter.setPen(QPen(QColor(QStringLiteral("#0a84ff")), 2));
     painter.setBrush(QColor(QStringLiteral("#f5f5f7")));
     for (const QRectF &handle : cropHandleRects())
