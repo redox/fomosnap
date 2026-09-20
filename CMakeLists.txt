@@ -34,6 +34,7 @@ set(FOMOSNAP_MAC_SOURCES
 )
 
 add_library(fomosnap-core STATIC
+  src/card-stack.hpp
   src/cli-path.cpp
   src/cli-path.hpp
   src/icons.cpp
