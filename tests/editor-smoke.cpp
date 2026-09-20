@@ -4143,6 +4143,171 @@ bool runOpLogCapKeepsLeadingCrop(QApplication &application, QString &error) {
   return true;
 }
 
+/** Crop edges track the pointer without moving or scaling the retained pixels.
+ *  The fitted image only settles back to the center when the drag ends. */
+bool runCropDragKeepsContentStill(QApplication &application, QString &error) {
+  const std::array<QPoint, 8> edges{
+      QPoint(-1, -1), QPoint(0, -1), QPoint(1, -1), QPoint(1, 0),
+      QPoint(1, 1), QPoint(0, 1), QPoint(-1, 1), QPoint(-1, 0)};
+  const auto near = [](const QPointF &actual, const QPointF &expected) {
+    return QLineF(actual, expected).length() < 0.01;
+  };
+  for (const bool windowed : {false, true}) {
+    // The wide scaled fixture leaves every edge inside the viewport, so all
+    // eight handles are available (viewport-clipped edges are not handles).
+    for (const QSize sourceSize : {QSize(400, 300), QSize(1600, 600)}) {
+      CaptureData capture;
+      capture.monitor.scale = 1.0;
+      capture.source = QImage(sourceSize, QImage::Format_ARGB32_Premultiplied);
+      capture.source.fill(QColor(QStringLiteral("#112233")));
+      capture.previewSize = sourceSize;
+      const QPointF landmark(sourceSize.width() * 0.6,
+                             sourceSize.height() * 0.6);
+      const QColor landmarkColor(QStringLiteral("#20d060"));
+      {
+        QPainter painter(&capture.source);
+        painter.fillRect(QRectF(landmark - QPointF(12, 12), QSizeF(24, 24)),
+                         landmarkColor);
+      }
+      for (const QPoint &edge : edges) {
+        CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+        editor.setSuppressSnapshots(true);
+        editor.setWindowedPresentation(windowed);
+        editor.resize(1000, 800);
+        editor.show();
+        application.processEvents();
+        const QRectF original = editor.currentSelection();
+        const QRectF frame = editor.sourceFrameWidgetRectForTest();
+        const qreal scale = editor.editScaleForTest();
+        const int history = editor.operationIndex();
+        const QPointF fixedPixel =
+            editor.annotationPointToWidgetForTest(landmark);
+        const QPointF boundary(
+            edge.x() < 0   ? frame.left()
+            : edge.x() > 0 ? frame.right()
+                           : frame.center().x(),
+            edge.y() < 0   ? frame.top()
+            : edge.y() > 0 ? frame.bottom()
+                           : frame.center().y());
+        const QPoint handle = (boundary + QPointF(edge) * 7).toPoint();
+        QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handle);
+        QPoint target;
+        // Include a reversal: every sample maps against the press-time frame.
+        for (const int distance : {20, 40, 30}) {
+          target = (boundary - QPointF(edge) * distance).toPoint();
+          QTest::mouseMove(&editor, target, 20);
+          application.processEvents();
+          QRectF expected = frame;
+          if (edge.x() < 0)
+            expected.setLeft(target.x());
+          if (edge.x() > 0)
+            expected.setRight(target.x());
+          if (edge.y() < 0)
+            expected.setTop(target.y());
+          if (edge.y() > 0)
+            expected.setBottom(target.y());
+          const QRectF actual = editor.sourceFrameWidgetRectForTest();
+          const QPointF retained =
+              landmark -
+              (editor.currentSelection().topLeft() - original.topLeft());
+          if (!near(actual.topLeft(), expected.topLeft()) ||
+              !near(actual.bottomRight(), expected.bottomRight()) ||
+              !near(editor.annotationPointToWidgetForTest(retained), fixedPixel) ||
+              std::abs(editor.editScaleForTest() - scale) > 0.0001 ||
+              editor.editImageRectForTest() != actual ||
+              editor.operationIndex() != history ||
+              !colorNear(grabLogicalPixel(editor.grab().toImage(), editor,
+                                         fixedPixel), landmarkColor, 2)) {
+            error = QStringLiteral("Crop drag moved retained pixels or detached "
+                                   "an edge (window %1, source %2, edge %3,%4)")
+                        .arg(windowed)
+                        .arg(sourceSize.width())
+                        .arg(edge.x())
+                        .arg(edge.y());
+            QDebug(&error) << "frame" << frame << "actual" << actual
+                           << "expected" << expected << "scale"
+                           << editor.editScaleForTest() << "was" << scale;
+            return false;
+          }
+        }
+        const QRectF cropped = editor.currentSelection();
+        QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, target);
+        application.processEvents();
+        const QRectF settled = editor.sourceFrameWidgetRectForTest();
+        if (cropped == original || editor.currentSelection() != cropped ||
+            editor.operationIndex() != history + 1 ||
+            QLineF(settled.center(), frame.center()).length() > 1.0) {
+          error = QStringLiteral("Crop release did not commit once and re-center");
+          return false;
+        }
+        QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+        application.processEvents();
+        if (editor.currentSelection() != original ||
+            editor.sourceFrameWidgetRectForTest() != frame) {
+          error = QStringLiteral("Undo did not restore the pre-crop frame");
+          return false;
+        }
+        QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+        application.processEvents();
+        if (editor.currentSelection() != cropped ||
+            editor.sourceFrameWidgetRectForTest() != settled) {
+          error = QStringLiteral("Redo did not restore the centered crop");
+          return false;
+        }
+        // Right-click cancels a second crop without leaving the live mapping.
+        const QPoint nextHandle = (settled.topLeft() - QPointF(7, 7)).toPoint();
+        QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, nextHandle);
+        const QPoint cancelAt = (settled.topLeft() + QPointF(25, 25)).toPoint();
+        QTest::mouseMove(&editor, cancelAt, 20);
+        QTest::mouseClick(&editor, Qt::RightButton, Qt::NoModifier, cancelAt);
+        QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, cancelAt);
+        application.processEvents();
+        if (editor.currentSelection() != cropped ||
+            editor.sourceFrameWidgetRectForTest() != settled ||
+            editor.operationIndex() != history + 1) {
+          error = QStringLiteral("Cancelling a crop left the image displaced");
+          return false;
+        }
+        if (sourceSize.width() == 400 && edge == QPoint(-1, 0)) {
+          for (int step = 0; step < 4; ++step)
+            QTest::keyClick(&editor, Qt::Key_Plus, Qt::ControlModifier);
+          const QPoint panStart =
+              editor.editViewportRectForTest().center().toPoint();
+          QTest::mousePress(&editor, Qt::MiddleButton, Qt::NoModifier, panStart);
+          QTest::mouseMove(&editor, panStart + QPoint(0, 30), 20);
+          QTest::mouseRelease(&editor, Qt::MiddleButton, Qt::NoModifier,
+                              panStart + QPoint(0, 30));
+          const QRectF panned = editor.sourceFrameWidgetRectForTest();
+          const qreal zoomedScale = editor.editScaleForTest();
+          const QPoint zoomHandle(qRound(panned.left() - 7),
+                                   qRound(panned.center().y()));
+          const QPoint zoomTarget = zoomHandle + QPoint(32, 0);
+          QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, zoomHandle);
+          QTest::mouseMove(&editor, zoomTarget, 20);
+          const QRectF live = editor.sourceFrameWidgetRectForTest();
+          if (zoomedScale <= scale ||
+              panned.center().y() - settled.center().y() < 20 ||
+              !near(live.topRight(), panned.topRight()) ||
+              std::abs(live.left() - zoomTarget.x()) > 0.01 ||
+              std::abs(editor.editScaleForTest() - zoomedScale) > 0.0001) {
+            error = QStringLiteral(
+                "Cropping a zoomed, panned image moved its pixels");
+            return false;
+          }
+          QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, zoomTarget);
+          if (QLineF(editor.sourceFrameWidgetRectForTest().center(),
+                     settled.center()).length() > 1.0) {
+            error = QStringLiteral("Crop release retained the previous pan offset");
+            return false;
+          }
+        }
+        editor.close();
+      }
+    }
+  }
+  return true;
+}
+
 /** A recrop moves the frame, never the ink: annotations stay over the
  *  pixels they were drawn on when the top/left crop handles move the
  *  selection origin. */
@@ -4188,6 +4353,13 @@ bool runCropKeepsAnnotationsAnchored(QApplication &application,
   QTest::mouseMove(&editor, handle, 20);
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, handle);
   QTest::mouseMove(&editor, inward, 20);
+  application.processEvents();
+  const QPointF linePixel = image.topLeft() + QPointF(150, 100);
+  if (!colorNear(grabLogicalPixel(editor.grab().toImage(), editor, linePixel),
+                 editor.renderCurrentOutput().pixelColor(107, 57), 2)) {
+    error = QStringLiteral("Live top-left crop displaced the annotation on screen");
+    return false;
+  }
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, inward);
   application.processEvents();
   if (editor.currentSelection() != QRectF(43, 43, 357, 257)) {
@@ -5311,9 +5483,24 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
       editor.currentSelection().topLeft() + textAnnotations.constFirst().start;
   QTest::keyClick(&editor, Qt::Key_V);
   const QRectF sourceFrame = editor.sourceFrameWidgetRectForTest();
+  const qreal cropScale = editor.editScaleForTest();
+  const QPointF textOnScreen =
+      editor.annotationPointToWidgetForTest(textAnnotations.constFirst().start);
   const QPoint cropLeft(qRound(sourceFrame.left() - 7),
                         qRound(sourceFrame.center().y()));
-  drag(cropLeft, cropLeft + QPoint(20, 0));
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, cropLeft);
+  QTest::mouseMove(&editor, cropLeft + QPoint(20, 0), 20);
+  application.processEvents();
+  if (std::abs(editor.editScaleForTest() - cropScale) > 0.0001 ||
+      QLineF(editor.annotationPointToWidgetForTest(
+                 editor.currentAnnotationsForTest().constFirst().start),
+             textOnScreen).length() > 0.01 || !canvasIsDerived()) {
+    error = QStringLiteral("Live recrop shifted text on the grown canvas");
+    return false;
+  }
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      cropLeft + QPoint(20, 0));
+  application.processEvents();
   const QRectF croppedSelection = editor.currentSelection();
   const QVector<Annotation> croppedAnnotations =
       editor.currentAnnotationsForTest();
@@ -10201,7 +10388,8 @@ int main(int argc, char **argv) {
     qWarning().noquote() << snapshotError;
     return 84;
   }
-  if (!runCropKeepsAnnotationsAnchored(application, snapshotError)) {
+  if (!runCropDragKeepsContentStill(application, snapshotError) ||
+      !runCropKeepsAnnotationsAnchored(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 125;
   }

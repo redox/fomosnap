@@ -2144,6 +2144,16 @@ QRectF CaptureEditor::baseImageRect() const {
 }
 
 QRectF CaptureEditor::editImageRect() const {
+  if (dragging_ && interaction_ >= Interaction::CropTopLeft) {
+    // Keep source pixels under the same screen coordinates until release.
+    // Only the dragged edges move; refitting here would pull the content
+    // toward the center as the top or left of the selection changes.
+    const qreal scale = cropDragImageRect_.width() / originalSelection_.width();
+    const QPointF origin =
+        selection_.topLeft() - originalSelection_.topLeft() + canvasRect_.topLeft();
+    return {cropDragImageRect_.topLeft() + origin * scale,
+            canvasRect_.size() * scale};
+  }
   const QRectF base = baseImageRect();
   if (base.isEmpty() || qFuzzyCompare(viewZoom_, 1.0))
     return base.translated(viewOffset_);
@@ -2713,6 +2723,8 @@ void CaptureEditor::refreshCanvasRect() {
     return;
   canvasRect_ = next;
   redactionBaseStale_ = true;
+  if (dragging_ && interaction_ >= Interaction::CropTopLeft)
+    return;
   viewZoom_ = std::min(viewZoom_, maxViewZoom());
   clampViewOffset();
 }
@@ -4736,6 +4748,7 @@ void CaptureEditor::mouseMoveEvent(QMouseEvent *event) {
         }
       }
       selection_ = updated;
+      refreshCanvasRect();
       if (updated != originalSelection_)
         dragChanged_ = true;
     } else if ((tool_ == Tool::Select ||
@@ -5487,6 +5500,10 @@ void CaptureEditor::mouseReleaseEvent(QMouseEvent *event) {
     dragging_ = false;
     resizeConstraintActive_ = false;
     interaction_ = Interaction::None;
+    if (cropped && changed) {
+      viewZoom_ = std::min(viewZoom_, maxViewZoom());
+      viewOffset_ = {};
+    }
     if (cropped)
       setStatus(QStringLiteral(
           "Crop updated · Select moves layers · wheel zooms selected layer"));
@@ -6767,9 +6784,10 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       (background != BackgroundStyle::Custom || !customBackdrop_.isNull());
   const bool framedBackground =
       hasBackground && canvasBoundaryMode_ == CanvasBoundaryMode::Framed;
-  // When zoomed past fit the image is larger than the viewport; clip content
-  // to the band between the toolbar and the status so it cannot overdraw them.
-  const bool clipViewport = viewZoom_ > 1.0;
+  // Zooming or expanding a crop at its press-time scale can exceed the
+  // viewport; keep the content clear of the toolbar and status.
+  const bool clipViewport =
+      viewZoom_ > 1.0 || (dragging_ && interaction_ >= Interaction::CropTopLeft);
   if (clipViewport) {
     painter.save();
     const qreal top = imageTopMargin();
