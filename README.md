@@ -543,8 +543,9 @@ Creation tools return to Select after one placement without selecting the new la
 Select mode, lines and straight arrows show two endpoint handles; curved and double arrows
 add an on-curve handle for bending the arc (hold `Shift` to keep that bend centered). Other
 layers show a selection boundary. The eight blue/white handles outside the image recrop
-its corners or edges. After the canvas grows, those crop handles remain on the original
-source frame.
+its corners or edges. The image stays in place while dragging a crop handle, then
+re-centers when released. After the canvas grows, those crop handles remain on the
+original source frame.
 
 ## Development and verification
 
