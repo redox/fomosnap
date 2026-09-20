@@ -1,6 +1,7 @@
 /** @fileoverview Handles screenshot selection, annotation, and editor drawing.
  */
 #include "editor.hpp"
+#include "card-stack.hpp"
 
 #include "stitch.hpp"
 #include "icons.hpp"
@@ -6442,13 +6443,10 @@ CaptureEditor::recentCards(qreal fan) const {
     const QPointF stacked(stackX + index * 1.5, stackY + index * 3.0);
     const QPointF fanned(fanX, y + size.height() / 2.0);
     const QPointF centre = stacked + (fanned - stacked) * fan;
-    // Alternate the lean of the cards beneath so the stack reads as a deck
-    // rather than a slide; the top card lies straight.
-    const qreal lean = (index % 2 == 0 ? 1.0 : -1.0) * index * 3.0;
     RecentCard card;
     card.rect = QRectF(centre - QPointF(size.width() / 2.0, size.height() / 2.0),
                        size);
-    card.rotation = lean * (1.0 - fan);
+    card.rotation = stackCardTilt(index, fan);
     cards.push_back(card);
     y += size.height() + kRecentCardGap;
   }
