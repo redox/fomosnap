@@ -1318,6 +1318,14 @@ CaptureEditor::Interaction CaptureEditor::pointerHandle() const {
   return selectedHandleAt(toAnnotationPoint(cursor_));
 }
 
+bool CaptureEditor::draggingPointHandle() const {
+  if (!dragging_ || !isLayerResize(interaction_) || selectedAnnotation_ < 0 ||
+      selectedAnnotation_ >= annotations_.size())
+    return false;
+  const Annotation::Kind kind = annotations_.at(selectedAnnotation_).kind;
+  return kind == Annotation::Kind::Arrow || kind == Annotation::Kind::Line;
+}
+
 Qt::CursorShape CaptureEditor::handleCursorShape(Interaction handle) const {
   // Never the move cursor: the handle resizes, the body moves, and the pointer
   // should say which one, and which way, before the press.
@@ -2800,6 +2808,9 @@ void CaptureEditor::cancelActiveDragForHistory() {
     cutDragActive_ = false;
     refreshComposedCapture();
   }
+  // Undo/redo can stop here when no history step is available. Restore the
+  // pointer after clearing the drag even when there is nothing to replay.
+  updatePointerCursor();
 }
 
 QString CaptureEditor::workingLogPath() const {
@@ -5899,6 +5910,13 @@ void CaptureEditor::updatePointerCursor() {
                                : Qt::CrossCursor);
     return;
   }
+  // The arrow tip, tail, or bend (and a line's endpoint) is the placement
+  // cue during its drag. Keep the pointer out of the way until release.
+  if (draggingPointHandle()) {
+    clearHighlighterPreview();
+    applyCursor(Qt::BlankCursor);
+    return;
+  }
   if (selectTabAt(cursor_) >= 0 || scrollPillRect().contains(cursor_)) {
     clearHighlighterPreview();
     applyCursor(Qt::PointingHandCursor);
@@ -7091,7 +7109,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   }
 
   if (selectedAnnotation_ >= 0 && selectedAnnotation_ < annotations_.size() &&
-      selectedAnnotation_ != editingAnnotation_) {
+      selectedAnnotation_ != editingAnnotation_ && !draggingPointHandle()) {
     const qreal scale = std::max<qreal>(editScale(), 0.01);
     const bool multiple = selectedAnnotations_.size() > 1;
     // Faint while a wheel adjustment is in flight: the handles sit exactly

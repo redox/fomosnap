@@ -50,6 +50,8 @@ global hotkey were rewritten against macOS frameworks.
   one-click whole-image or drag-region OCR (the recognized text is shown beside
   the image and copied to the clipboard),
   mesh-gradient backdrops, and rendered drop shadows on standard backdrop cards.
+- Dragging an arrow head, tail, or bend, or a line endpoint, hides the cursor
+  and drag handles for precise placement. They return on release or cancellation.
 - Cut tool: drag across a band of the image to remove it and collapse the gap, with a
   live preview and dashed seam marker while dragging; annotations shift to follow.
   Moving or resizing an existing layer suspends the armed tool's action until

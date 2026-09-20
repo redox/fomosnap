@@ -257,6 +257,7 @@ private:
   /// the layer it belongs to.
   [[nodiscard]] Interaction selectedHandleAt(const QPointF &point) const;
   [[nodiscard]] Interaction pointerHandle() const;
+  [[nodiscard]] bool draggingPointHandle() const;
   [[nodiscard]] Qt::CursorShape handleCursorShape(Interaction handle) const;
   /// Moves the edges a box handle owns, keeping the opposite ones put; Shift
   /// on a corner keeps the proportions.

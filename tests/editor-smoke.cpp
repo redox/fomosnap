@@ -9697,6 +9697,34 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   // Select the Curved arrow at its default on-curve midpoint, then drag that
   // third handle. The committed value is the back-solved Bezier control, not
   // the visible midpoint itself.
+  const auto expectPointChrome = [&](bool visible, const QString &gesture) {
+    if ((editor.cursor().shape() != Qt::BlankCursor) != visible) {
+      error = QStringLiteral("%1 left the cursor %2")
+                  .arg(gesture, visible ? QStringLiteral("hidden")
+                                        : QStringLiteral("visible"));
+      return false;
+    }
+    // Each selected layer is raised to the top by the gesture below.
+    const Annotation &selected = editor.currentAnnotationsForTest().constLast();
+    QVector<QPointF> points{selected.start, selected.end};
+    if (selected.kind == Annotation::Kind::Arrow &&
+        (selected.arrowStyle == ArrowStyle::Curved ||
+         selected.arrowStyle == ArrowStyle::Double))
+      points.push_back(arrowCurveHandlePoint(selected));
+    const QImage ui = editor.grab().toImage();
+    for (const QPointF &point : points) {
+      const QColor pixel = grabLogicalPixel(
+          ui, editor, editor.annotationPointToWidgetForTest(point));
+      if ((pixel == QColor(QStringLiteral("#0a84ff"))) != visible) {
+        error = QStringLiteral("%1 left a point handle %2 at %3,%4 (pixel %5)")
+                    .arg(gesture, visible ? QStringLiteral("hidden")
+                                          : QStringLiteral("visible"))
+                    .arg(point.x()).arg(point.y()).arg(pixel.name());
+        return false;
+      }
+    }
+    return true;
+  };
   QTest::keyClick(&editor, Qt::Key_V);
   QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 290));
   application.processEvents();
@@ -9704,10 +9732,16 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   // Begin 15 screen px off the handle: Curved/Double intentionally double
   // the normal 9 px target radius for all three handles.
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(400, 305));
+  if (!expectPointChrome(false, QStringLiteral("Pressing an arrow bend")))
+    return false;
   QTest::mouseMove(&editor, QPoint(420, 250), 20);
+  if (!expectPointChrome(false, QStringLiteral("Dragging an arrow bend")))
+    return false;
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(420, 250));
   application.processEvents();
+  if (!expectPointChrome(true, QStringLiteral("Releasing an arrow bend")))
+    return false;
   if (editor.operationIndex() != beforeBend + 1 ||
       editor.operationLog().constLast().type != Operation::Type::Patch ||
       editor.operationLog().constLast().annotations.size() != 1) {
@@ -9735,6 +9769,8 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   const int beforeMove = editor.operationIndex();
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(335, 270));
   QTest::mouseMove(&editor, QPoint(345, 280), 20);
+  if (!expectPointChrome(true, QStringLiteral("Moving a whole arrow")))
+    return false;
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(345, 280));
   application.processEvents();
@@ -9765,6 +9801,8 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   const int beforeResize = editor.operationIndex();
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(250, 355));
   QTest::mouseMove(&editor, QPoint(270, 340), 20);
+  if (!expectPointChrome(false, QStringLiteral("Dragging an arrow tail")))
+    return false;
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
                       QPoint(270, 340));
   application.processEvents();
@@ -9851,6 +9889,8 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier,
                     arrowEndScreen.toPoint());
   QTest::mouseMove(&editor, rawArrowEndScreen.toPoint(), 20);
+  if (!expectPointChrome(false, QStringLiteral("Dragging an arrow head")))
+    return false;
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
                       rawArrowEndScreen.toPoint());
   QTest::keyRelease(&editor, Qt::Key_Shift);
@@ -9903,10 +9943,14 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
   QTest::mousePress(&editor, Qt::LeftButton, Qt::ShiftModifier,
                     lineEndScreen.toPoint());
   QTest::mouseMove(&editor, rawLineEndScreen.toPoint(), 20);
+  if (!expectPointChrome(false, QStringLiteral("Dragging a line endpoint")))
+    return false;
   QTest::mouseRelease(&editor, Qt::LeftButton, Qt::ShiftModifier,
                       rawLineEndScreen.toPoint());
   QTest::keyRelease(&editor, Qt::Key_Shift);
   application.processEvents();
+  if (!expectPointChrome(true, QStringLiteral("Releasing a line endpoint")))
+    return false;
   if (editor.operationIndex() != beforeShiftLineResize + 1 ||
       editor.operationLog().constLast().annotations.size() != 1) {
     error = QStringLiteral("Pre-held Shift did not resize the line endpoint");
@@ -9918,6 +9962,33 @@ bool runArrowStyleSmoke(QApplication &application, QString &error) {
       QLineF(snappedLine.end, expectedLineEnd).length() > 1.5) {
     error = QStringLiteral("Pre-held Shift did not snap the line endpoint");
     return false;
+  }
+
+  // Right-click and an empty redo both cancel the in-progress drag. Neither
+  // may strand the hidden cursor or commit the temporary geometry.
+  const QImage beforeCancel = editor.renderCurrentOutput();
+  const int historyBeforeCancel = editor.operationIndex();
+  for (const bool cancelWithRedo : {false, true}) {
+    const QPoint endpoint =
+        editor.annotationPointToWidgetForTest(snappedLine.end).toPoint();
+    const QPoint target = endpoint + QPoint(-30, -35);
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, endpoint);
+    QTest::mouseMove(&editor, target, 20);
+    if (!expectPointChrome(false, QStringLiteral("Dragging before cancellation")))
+      return false;
+    if (cancelWithRedo)
+      QTest::keyClick(&editor, Qt::Key_Y, Qt::ControlModifier);
+    else
+      QTest::mouseClick(&editor, Qt::RightButton, Qt::NoModifier, target);
+    application.processEvents();
+    if (!expectPointChrome(true, QStringLiteral("Cancelling a point drag")) ||
+        editor.renderCurrentOutput() != beforeCancel ||
+        editor.operationIndex() != historyBeforeCancel) {
+      if (error.isEmpty())
+        error = QStringLiteral("Cancelling a point drag changed the document");
+      return false;
+    }
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier, target);
   }
 
   QTemporaryDir directory;
