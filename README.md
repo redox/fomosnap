@@ -450,12 +450,17 @@ without reaching for the pointer.
 | Drag | Select a region, with its native pixel size shown at the pointer |
 | `Space` | Toggle Region and Window (Scrolling Region is `S` or the tab) |
 | `S` | Toggle scrolling-region mode |
-| `R` | Restore the last region drawn this session (same monitor) |
+| `R` | Restore the last drawn region, including from a previous FOMOsnap launch in this login session (same monitor and overlay size) |
 | `Cmd+Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |
 | `Cmd+A` | Select the full focused monitor (the Fullscreen tab) |
 | Hover the right-edge stack | Fan out the five most recent captures; click one to reopen it |
 | `Esc` | Dismiss (while selecting; in the editor, `Esc` returns to Select and a second `Esc` closes) |
+
+Region memory is stored in FOMOsnap's private runtime directory. It survives
+closing and reopening FOMOsnap, but is cleared with the login session's runtime
+files. A region from another monitor, a different overlay size, or outside the
+current screen is ignored; draw a new region after changing the display layout.
 
 ### Annotation editor
 
