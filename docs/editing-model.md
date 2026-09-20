@@ -38,6 +38,11 @@ snapshot. Each of those calls `renderCapture` once, off the UI thread (see
 [threading.md](threading.md)), and writes the result. Until one of those
 happens, everything remains a log entry you can undo.
 
+Scrolling captures retain the monitor's scale when they become editable
+documents. Their native pixels stay intact; only the logical presentation size
+changes. Loaded documents also retain their exact pixel dimensions on export,
+even when the logical size was rounded for a scaled display.
+
 ## The two exceptions, and why they're still safe
 
 Two operations *do* need to touch real pixels before export, and both are
