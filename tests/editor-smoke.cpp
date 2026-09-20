@@ -5147,6 +5147,12 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
                 .arg(shadowRestoreError);
     return false;
   }
+  // Restoring starts an autosave to the shared per-process working path.
+  // Drain it before the original editor begins another history write.
+  if (!shadowRestored.waitForSnapshot()) {
+    error = QStringLiteral("Restored shadow snapshot failed");
+    return false;
+  }
   shadowRestored.close();
   QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
   application.processEvents();
@@ -5352,6 +5358,10 @@ bool runSelectOutsideCanvasSmoke(QApplication &application, QString &error) {
       restored.renderCurrentOutput() != croppedOutput) {
     error = QStringLiteral("Restoring text growth changed canvas: %1")
                 .arg(restoreError);
+    return false;
+  }
+  if (!restored.waitForSnapshot()) {
+    error = QStringLiteral("Restored text-growth snapshot failed");
     return false;
   }
   restored.close();
