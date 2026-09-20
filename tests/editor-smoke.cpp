@@ -4622,9 +4622,23 @@ bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
     error = QStringLiteral("Overflow boundary was not persisted");
     return false;
   }
+  // File-mode construction autosaves immediately to the per-process working
+  // path. Keep the original persisted log separate before creating its reader.
+  QTemporaryDir persisted;
+  const QString persistedLog = persisted.filePath(QStringLiteral("capture.json"));
+  if (!persisted.isValid() || !QFile::copy(editor.workingLogPath(), persistedLog)) {
+    error = QStringLiteral("Could not isolate the persisted boundary log");
+    return false;
+  }
   CaptureEditor restored(capture, CaptureEditor::CaptureMode::File);
+  // Force the new editor's initial save to finish first: restoring must not
+  // depend on winning a race against its replacement of the shared log.
+  if (!restored.waitForSnapshot()) {
+    error = QStringLiteral("Restored editor initial snapshot failed");
+    return false;
+  }
   QString restoreError;
-  if (!restored.restoreOperationLog(editor.workingLogPath(), restoreError) ||
+  if (!restored.restoreOperationLog(persistedLog, restoreError) ||
       restored.currentCanvasBoundaryForTest() !=
           CanvasBoundaryMode::Overflow ||
       restored.currentCanvasForTest() != overflowCanvas ||
@@ -4633,6 +4647,10 @@ bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
     error =
         QStringLiteral("Restoring Overflow changed its layers or clipping: %1")
             .arg(restoreError);
+    return false;
+  }
+  if (!restored.waitForSnapshot()) {
+    error = QStringLiteral("Restored boundary snapshot failed");
     return false;
   }
   restored.close();
