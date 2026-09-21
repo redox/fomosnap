@@ -308,6 +308,10 @@ fomosnap smart       # maps to region selection
 These options choose what is initially selected; the editor still controls whether the
 result is copied, saved, or both.
 
+`E` or `A` in the capture overlay toggles annotation after the shot. Press
+either key again to turn it off. The editor then controls whether the result
+is copied, saved, or both.
+
 Quick output skips the annotation editor. Add `--copy` to copy only, `--save` to save
 only, or both flags to copy and save. Region and window captures output after selection;
 fullscreen captures output immediately. Quick output cannot be combined with `--file`,
@@ -454,6 +458,7 @@ without reaching for the pointer.
 | Drag | Select a region, with its native pixel size shown at the pointer |
 | `Space` | Toggle Region and Window (Scrolling Region is `S` or the tab) |
 | `S` | Toggle scrolling-region mode |
+| `E` / `A` | Toggle annotation after capture; the capture guide shows on/off, and the choice also applies to scrolling captures |
 | `R` | Restore the last drawn region, including from a previous FOMOsnap launch in this login session (same monitor and overlay size) |
 | `Cmd+Arrow` | Move among windows in window mode |
 | `Enter` | Capture the highlighted window |
