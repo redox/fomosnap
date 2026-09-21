@@ -207,6 +207,20 @@ inline constexpr qreal kMinimumTextWrapWidth = 48.0;
 [[nodiscard]] QRectF textLabelBounds(const QFont &font, const QString &text,
                                      const QPointF &glyphTopLeft,
                                      TextBackground background);
+/** Whether a spotlight has an opening inside `bounds`. The first one that
+ *  does dims everything else there, so it changes far more than its own
+ *  rectangle. */
+[[nodiscard]] bool spotlightOpens(const Annotation &annotation,
+                                  const QRectF &bounds);
+/** Width of the pen a layer's outline is stroked with; 0 when it has none. */
+[[nodiscard]] qreal annotationPenWidth(const Annotation &annotation);
+/**
+ * Extent of everything a layer paints, in annotation space, antialiasing
+ * included. Canvas growth and the editor's repaint damage both read it, so a
+ * layer can never paint outside what either of them allows for. Empty for a
+ * redaction, which only ever replaces source pixels.
+ */
+[[nodiscard]] QRectF annotationPaintedBounds(const Annotation &annotation);
 /**
  * Pixel-aligned annotation space selected by `boundaryMode`. Grow contains
  * every painted extent, Frame stops at the normal backdrop frame, and Image

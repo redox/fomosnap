@@ -594,7 +594,36 @@ private:
   void dismissOcrOverlay();
   void paintOcrOverlay(QPainter &painter, const QRectF &image, qreal scale);
   void setStatus(QString status);
-  [[nodiscard]] QRegion pointerMotionRegion(const QPointF &point) const;
+  /** Default-layer annotations as the edit view shows them right now. */
+  struct LiveLayers {
+    /// Committed layers, minus the one being typed into, plus `preview`.
+    QVector<Annotation> annotations;
+    /// Index of the layer in progress (a dragged-out shape or the counter
+    /// ghost), or -1.
+    int preview = -1;
+    /// A drag or an off-canvas ghost may show layers past the settled canvas.
+    bool carried = false;
+  };
+  /** What paintEdit() draws for the pointer at `pointer`; pointer damage
+   *  reads the same layers so the two cannot drift apart. */
+  [[nodiscard]] LiveLayers liveLayers(const QPointF &pointer) const;
+  /** What paintEdit() fills beyond the layers themselves. */
+  struct LiveCanvas {
+    /// The settled canvas, or the bounds a carried layer previews.
+    QRectF rect;
+    /// A spotlight has an opening in `rect`, so all the rest of it is dimmed.
+    bool dimmed = false;
+    bool operator==(const LiveCanvas &) const = default;
+  };
+  [[nodiscard]] LiveCanvas liveCanvas(const LiveLayers &live) const;
+  /** Pixels that depend on the pointer at `point`. `canvas`, when given,
+   *  receives liveCanvas() for the same state. */
+  [[nodiscard]] QRegion pointerMotionRegion(const QPointF &point,
+                                            LiveCanvas *canvas = nullptr) const;
+  /** Pixels repainted when the live canvas changes between two states. */
+  [[nodiscard]] QRegion liveCanvasDamage(const LiveCanvas &before,
+                                         const LiveCanvas &after) const;
+  [[nodiscard]] QRegion windowHoverDamage(int oldIndex, int newIndex) const;
   void queuePointerRepaint(const QRegion &damage);
   void toggleShapeFill();
   void toggleTextBackground();

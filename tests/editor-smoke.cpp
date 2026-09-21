@@ -24,6 +24,7 @@
 #include "icons.hpp"
 
 #include <QApplication>
+#include <QBackingStore>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QBuffer>
@@ -1249,6 +1250,178 @@ bool runPointerDamageRegionCheck(QString &error) {
                 .arg(damagedPixels)
                 .arg(screenPixels);
     return false;
+  }
+  return true;
+}
+
+/** Pointer damage must cover every pixel a carried layer changes. grab()
+ *  repaints the whole widget, so it cannot see a pixel a partial repaint
+ *  missed; this compares it against what the backing store really holds. */
+bool runPointerDamageRepaintSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 1000, 700};
+  capture.monitor.pixelSize = {1000, 700};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(600, 400, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#d8dde6")));
+  capture.previewSize = capture.source.size();
+
+  const auto layer = [](Annotation::Kind kind, QPointF start, QPointF end,
+                        quint64 id) {
+    Annotation annotation;
+    annotation.kind = kind;
+    annotation.start = start;
+    annotation.end = end;
+    annotation.color = QColor(QStringLiteral("#ff375f"));
+    annotation.size = 4.0;
+    annotation.id = id;
+    return annotation;
+  };
+  Annotation wave =
+      layer(Annotation::Kind::Highlighter, {120, 200}, {340, 200}, 1);
+  for (int index = 0; index <= 22; ++index) {
+    const qreal along = index / 22.0;
+    wave.points.push_back(QPointF(120 + 220 * along,
+                                  200 + 30 * std::sin(along * 6.283)));
+  }
+  wave.rawPoints = wave.points;
+  const Annotation arrow =
+      layer(Annotation::Kind::Arrow, {360, 150}, {520, 230}, 2);
+
+  struct Case {
+    QString name;
+    BackgroundStyle background;
+    CanvasBoundaryMode boundary;
+    QVector<Annotation> annotations;
+    QPointF grab;
+    QPointF travel;
+    Qt::Key tool = Qt::Key_V; // Select carries a layer; a tool draws one
+  };
+  const QVector<Case> cases{
+      // An ellipse leaves its bounding rectangle everywhere but four points.
+      {QStringLiteral("hollow ellipse"), BackgroundStyle::None,
+       CanvasBoundaryMode::Framed,
+       {layer(Annotation::Kind::Ellipse, {120, 100}, {330, 260}, 1)},
+       {120, 180},
+       {150, 90}},
+      // A stroke's dashed bounds and handles sit well away from its ink.
+      {QStringLiteral("selected stroke"), BackgroundStyle::None,
+       CanvasBoundaryMode::Framed, {wave}, {120, 200}, {150, 90}},
+      // Overflow lays its backdrop out against the canvas being previewed.
+      {QStringLiteral("overflow backdrop"), BackgroundStyle::Aurora,
+       CanvasBoundaryMode::Overflow, {arrow}, {440, 190}, {260, 20}},
+      // A spotlight dims the canvas its layers would settle to.
+      {QStringLiteral("spotlight"), BackgroundStyle::None,
+       CanvasBoundaryMode::Framed,
+       {layer(Annotation::Kind::Spotlight, {80, 220}, {260, 360}, 1), arrow},
+       {440, 190},
+       {260, 20}},
+      // The first pixel of a lens being dragged out dims the whole canvas,
+      // and it arrives on a pointer move rather than on the press.
+      {QStringLiteral("spotlight drawn"), BackgroundStyle::None,
+       CanvasBoundaryMode::Framed, {}, {150, 120}, {240, 160}, Qt::Key_S},
+  };
+
+  // -1 when this platform's backing store cannot be read back.
+  const auto stalePixels = [](QWidget &widget) -> qint64 {
+    QPaintDevice *device = widget.backingStore()->paintDevice();
+    if (!device || device->devType() != QInternal::Image)
+      return -1;
+    const QImage shown = static_cast<QImage *>(device)->convertToFormat(
+        QImage::Format_ARGB32_Premultiplied);
+    const QImage fresh = widget.grab().toImage().convertToFormat(
+        QImage::Format_ARGB32_Premultiplied);
+    if (shown.size() != fresh.size())
+      return -1;
+    qint64 stale = 0;
+    for (int y = 0; y < shown.height(); ++y) {
+      const auto *was = reinterpret_cast<const QRgb *>(shown.constScanLine(y));
+      const auto *want = reinterpret_cast<const QRgb *>(fresh.constScanLine(y));
+      for (int x = 0; x < shown.width(); ++x) {
+        // Resampling may differ by a level or two between a span that starts
+        // at the image edge and one that starts at a damage rectangle.
+        constexpr int slop = 16;
+        if (std::abs(qRed(was[x]) - qRed(want[x])) > slop ||
+            std::abs(qGreen(was[x]) - qGreen(want[x])) > slop ||
+            std::abs(qBlue(was[x]) - qBlue(want[x])) > slop ||
+            std::abs(qAlpha(was[x]) - qAlpha(want[x])) > slop)
+          ++stale;
+      }
+    }
+    return stale;
+  };
+
+  for (const Case &test : cases) {
+    Operation background;
+    background.type = Operation::Type::Background;
+    background.background = test.background;
+    Operation boundary;
+    boundary.type = Operation::Type::CanvasBoundary;
+    boundary.canvasBoundary = test.boundary;
+    Operation annotate;
+    annotate.type = Operation::Type::Annotate;
+    annotate.annotations = test.annotations;
+    OperationLog log;
+    log.ops = {background, boundary, annotate};
+    log.index = 3;
+    log.nextId = test.annotations.size() + 1;
+    log.previewSize = capture.previewSize;
+
+    CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                         QuickOutputMode::None, log);
+    editor.resize(1000, 700);
+    editor.show();
+    if (!QTest::qWaitForWindowExposed(&editor)) {
+      error = QStringLiteral("Damage smoke window was never exposed");
+      return false;
+    }
+    QTest::keyClick(&editor, test.tool);
+    QTest::qWait(40);
+    const qint64 atRest = stalePixels(editor);
+    if (atRest < 0) {
+      editor.close();
+      return true; // nothing to read back here; the offscreen run covers it
+    }
+    if (atRest != 0) {
+      error = QStringLiteral("%1: %2 backing-store pixels were stale at rest")
+                  .arg(test.name)
+                  .arg(atRest);
+      return false;
+    }
+
+    const QPointF from = editor.annotationPointToWidgetForTest(test.grab);
+    QTest::mouseMove(&editor, from.toPoint());
+    QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, from.toPoint());
+    // Let the press's own full repaint land first, as a real pointer would:
+    // the moves after it are the ones that repaint only their damage.
+    QTest::qWait(40);
+    constexpr int steps = 8;
+    for (int step = 1; step <= steps; ++step) {
+      QTest::mouseMove(&editor,
+                       (from + test.travel * (step / qreal(steps))).toPoint());
+      QTest::qWait(30); // one coalesced pointer repaint
+      application.processEvents();
+      // Checked while the layer is still carried: release repaints everything.
+      // A repaint that is merely late on a busy machine lands within a pause;
+      // a pixel the damage missed stays missed.
+      qint64 stale = stalePixels(editor);
+      if (stale != 0) {
+        QTest::qWait(80);
+        stale = stalePixels(editor);
+      }
+      if (stale != 0) {
+        error = QStringLiteral("%1: carrying the layer left %2 pixels a full "
+                               "repaint would have changed (step %3)")
+                    .arg(test.name)
+                    .arg(stale)
+                    .arg(step);
+        return false;
+      }
+    }
+    QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                        (from + test.travel).toPoint());
+    editor.close();
   }
   return true;
 }
@@ -10154,6 +10327,10 @@ int main(int argc, char **argv) {
   if (!runSelectionRepaintSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 215;
+  }
+  if (!runPointerDamageRepaintSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 138;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
