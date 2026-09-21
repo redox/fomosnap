@@ -35,7 +35,8 @@ global hotkey were rewritten against macOS frameworks.
   sides needed by annotations, with no frame), then Image (the original canvas
   size, clipping every outside annotation). `Shift+G` cycles backward without
   changing layer geometry. New framed strips start in window gray with the
-  original screenshot's card shadow. `B` cycles through the colorful backdrops,
+  original screenshot's card shadow, and follow a layer live while it is drawn
+  or carried past the edge, or back inside it. `B` cycles through the colorful backdrops,
   shadowed and flat window gray, and Off so a background can always be removed.
   Overflow with no backdrop leaves its added pixels transparent. `Shift+B`
   toggles the current shadow directly, and undo/delete can contract grown strips.

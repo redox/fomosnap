@@ -1317,6 +1317,13 @@ bool runPointerDamageRepaintSmoke(QApplication &application, QString &error) {
        {layer(Annotation::Kind::Spotlight, {80, 220}, {260, 360}, 1), arrow},
        {440, 190},
        {260, 20}},
+      // A canvas that has already grown gives its mat back as the layer
+      // that grew it is carried home.
+      {QStringLiteral("framed shrink"), BackgroundStyle::None,
+       CanvasBoundaryMode::Framed,
+       {layer(Annotation::Kind::Arrow, {560, 150}, {700, 230}, 1)},
+       {630, 190},
+       {-260, 20}},
       // The first pixel of a lens being dragged out dims the whole canvas,
       // and it arrives on a pointer move rather than on the press.
       {QStringLiteral("spotlight drawn"), BackgroundStyle::None,
@@ -1423,6 +1430,139 @@ bool runPointerDamageRepaintSmoke(QApplication &application, QString &error) {
                         (from + test.travel).toPoint());
     editor.close();
   }
+  return true;
+}
+
+/** Framed growth shows its window-gray mat while the layer is still being
+ *  carried, not only once it is released. */
+bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 1000, 700};
+  capture.monitor.pixelSize = {1000, 700};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(600, 400, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#d8dde6")));
+  capture.previewSize = capture.source.size();
+
+  Annotation arrow;
+  arrow.kind = Annotation::Kind::Arrow;
+  arrow.start = {360, 250};
+  arrow.end = {520, 330};
+  arrow.color = QColor(QStringLiteral("#ff375f"));
+  arrow.id = 1;
+  Operation annotate;
+  annotate.type = Operation::Type::Annotate;
+  annotate.annotations = {arrow};
+  OperationLog log;
+  log.ops = {annotate};
+  log.index = 1;
+  log.nextId = 2;
+  log.previewSize = capture.previewSize;
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                       QuickOutputMode::None, log);
+  editor.resize(1000, 700);
+  editor.show();
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_V);
+
+  // Just past the image's right edge and well above the arrow: surround at
+  // rest, mat once the arrow's canvas frames the image.
+  const QRectF frame = editor.sourceFrameWidgetRectForTest();
+  const QPoint probe(qRound(frame.right()) + 30, qRound(frame.top()) + 20);
+  const auto matAt = [&editor](const QPoint &point) {
+    const QColor color = editor.grab().toImage().pixelColor(point);
+    return color.alpha() == 255 && colorNear(color, QColor(0x24, 0x24, 0x24));
+  };
+  if (matAt(probe)) {
+    error = QStringLiteral("Framed canvas showed a mat before anything grew it");
+    return false;
+  }
+  const QPoint from = editor.annotationPointToWidgetForTest({440, 290}).toPoint();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, from);
+  QTest::mouseMove(&editor, from + QPoint(60, 0));
+  if (matAt(probe)) {
+    error = QStringLiteral("Framed canvas grew for a layer still inside it");
+    return false;
+  }
+  QTest::mouseMove(&editor, from + QPoint(200, 0));
+  if (!matAt(probe)) {
+    error = QStringLiteral(
+        "Framed canvas did not grow its mat while the layer was carried");
+    return false;
+  }
+  // Carried back inside, the preview goes with it.
+  QTest::mouseMove(&editor, from + QPoint(60, 0));
+  if (matAt(probe)) {
+    error = QStringLiteral("Framed preview mat outlived the layer leaving it");
+    return false;
+  }
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      from + QPoint(60, 0));
+
+  // The same holds once the canvas has settled grown: carrying the layer that
+  // grew it back inside gives the mat up at once, not only on release. Each
+  // release re-fits the view, so geometry is read again after it.
+  const auto arrowGrip = [&editor] {
+    const Annotation &carried = editor.currentAnnotationsForTest().constFirst();
+    return editor
+        .annotationPointToWidgetForTest((carried.start + carried.end) / 2.0)
+        .toPoint();
+  };
+  const auto matProbe = [&editor] {
+    const QRectF settled = editor.sourceFrameWidgetRectForTest();
+    return QPoint(qRound(settled.right()) + 30, qRound(settled.top()) + 20);
+  };
+  QPoint grip = arrowGrip();
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, grip);
+  QTest::mouseMove(&editor, grip + QPoint(200, 0));
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      grip + QPoint(200, 0));
+  application.processEvents();
+  if (!editor.currentCanvasForTest().contains(
+          QRectF(QPointF(), QSizeF(capture.previewSize)).adjusted(-1, -1, 1, 1)) ||
+      !matAt(matProbe())) {
+    error = QStringLiteral("Released outside, the Framed canvas did not settle "
+                           "grown with its mat");
+    return false;
+  }
+  grip = arrowGrip();
+  const QPoint probeGrown = matProbe();
+  // Hard against the image, where a mat's card shadow and Framed's narrow
+  // backing at rest would both show: with the layer home, neither belongs.
+  const QRectF grownFrame = editor.sourceFrameWidgetRectForTest();
+  const QPoint besideImage(qRound(grownFrame.right()) + 12,
+                           qRound(grownFrame.top()) + 20);
+  const QPoint belowImage(qRound(grownFrame.center().x()),
+                          qRound(grownFrame.bottom()) + 20);
+  const auto bareSurroundAt = [&editor](const QPoint &point) {
+    const QColor color = editor.grab().toImage().pixelColor(point);
+    return color.red() < 8 && color.green() < 8 && color.blue() < 8 &&
+           std::abs(color.alpha() - 160) <= 4;
+  };
+  QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, grip);
+  QTest::mouseMove(&editor, grip - QPoint(120, 0));
+  QTest::mouseMove(&editor, grip - QPoint(260, 0));
+  if (matAt(probeGrown)) {
+    error = QStringLiteral("Framed mat stayed behind a layer carried back "
+                           "inside until release");
+    return false;
+  }
+  if (!bareSurroundAt(besideImage) || !bareSurroundAt(belowImage)) {
+    error = QStringLiteral("A layer carried all the way home left the grown "
+                           "canvas's backing or card shadow around the image");
+    return false;
+  }
+  QTest::mouseRelease(&editor, Qt::LeftButton, Qt::NoModifier,
+                      grip - QPoint(260, 0));
+  application.processEvents();
+  if (matAt(matProbe())) {
+    error = QStringLiteral("Framed canvas kept its mat after the layer settled "
+                           "back inside");
+    return false;
+  }
+  editor.close();
   return true;
 }
 
@@ -10331,6 +10471,10 @@ int main(int argc, char **argv) {
   if (!runPointerDamageRepaintSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 138;
+  }
+  if (!runFramedLiveGrowthSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 139;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;

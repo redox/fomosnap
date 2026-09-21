@@ -40,8 +40,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-constexpr qreal kBackdropMargin = 64.0;
-
 bool loadCaptureFonts() {
   static const std::array<int, 3> fontIds{
       QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf")),

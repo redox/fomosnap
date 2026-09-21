@@ -2146,9 +2146,16 @@ QRectF CaptureEditor::baseImageRect() const {
   const qreal top = imageTopMargin();
   const QRectF available(30, top, std::max(1, width() - 60),
                          std::max<qreal>(1, height() - top - 58));
+  // Fit the full exported frame, while keeping image/layer coordinates tied
+  // to the source. A grown canvas already includes its backdrop margin.
+  const qreal margin = !canvasGrown() && hasCaptureBackground() &&
+                               canvasBoundaryMode_ == CanvasBoundaryMode::Framed
+                           ? kBackdropMargin
+                           : 0.0;
+  const QSizeF framedSize = canvasRect_.size() + QSizeF(2 * margin, 2 * margin);
   const qreal scale =
-      std::min<qreal>({1.0, available.width() / canvasRect_.width(),
-                       available.height() / canvasRect_.height()});
+      std::min<qreal>({1.0, available.width() / framedSize.width(),
+                       available.height() / framedSize.height()});
   const QSizeF shown = canvasRect_.size() * scale;
   // Snapped to the pixel grid: centering can land the origin on a half
   // pixel, which is needless blur at scale 1 (the common case, an
@@ -2744,14 +2751,25 @@ void CaptureEditor::refreshCanvasRect() {
   clampViewOffset();
 }
 
-bool CaptureEditor::canvasGrown() const {
-  if (selection_.isEmpty() || canvasRect_.isEmpty())
+bool CaptureEditor::exceedsSourceFrame(const QRectF &canvas) const {
+  if (selection_.isEmpty() || canvas.isEmpty())
     return false;
   const QRectF sourceFrame(QPointF(), selection_.size());
-  return canvasRect_.left() < sourceFrame.left() - 0.001 ||
-         canvasRect_.top() < sourceFrame.top() - 0.001 ||
-         canvasRect_.right() > sourceFrame.right() + 0.001 ||
-         canvasRect_.bottom() > sourceFrame.bottom() + 0.001;
+  return canvas.left() < sourceFrame.left() - 0.001 ||
+         canvas.top() < sourceFrame.top() - 0.001 ||
+         canvas.right() > sourceFrame.right() + 0.001 ||
+         canvas.bottom() > sourceFrame.bottom() + 0.001;
+}
+
+bool CaptureEditor::canvasGrown() const {
+  return exceedsSourceFrame(canvasRect_);
+}
+
+bool CaptureEditor::hasCaptureBackground() const {
+  const BackgroundStyle background = effectiveBackgroundStyle();
+  return background != BackgroundStyle::None &&
+         background != BackgroundStyle::Off &&
+         (background != BackgroundStyle::Custom || !customBackdrop_.isNull());
 }
 
 BackgroundStyle CaptureEditor::effectiveBackgroundStyle() const {
@@ -4575,16 +4593,31 @@ CaptureEditor::liveLayers(const QPointF &pointer) const {
 
 CaptureEditor::LiveCanvas
 CaptureEditor::liveCanvas(const LiveLayers &live) const {
-  // A carried layer previews its final canvas outside Framed mode, and a
-  // spotlight dims and samples the canvas its layers would settle to in any
-  // mode. Everything else paints against the settled canvas.
-  const bool previews =
-      live.carried && canvasBoundaryMode_ != CanvasBoundaryMode::Framed;
+  // A carried layer previews the canvas it would settle to, and a spotlight
+  // dims and samples that canvas whether or not anything is carried.
+  // Everything else paints against the settled canvas. Framed previews only
+  // a layer being drawn or carried: its frame surrounds the whole image, and
+  // a hovering counter ghost must not pop that in and out at the image edge.
+  const bool layerDrag = dragging_ && interaction_ < Interaction::CropTopLeft &&
+                         !marqueeSelecting_;
   LiveCanvas canvas;
-  canvas.rect = previews || showsSpotlight(live.annotations)
+  canvas.previews = canvasBoundaryMode_ == CanvasBoundaryMode::Framed
+                        ? layerDrag
+                        : live.carried;
+  canvas.rect = canvas.previews || showsSpotlight(live.annotations)
                     ? captureCanvasRect(selection_.size(), live.annotations,
                                         canvasBoundaryMode_)
                     : canvasRect_;
+  // Framed growth with no backdrop chosen gets the window-gray mat, as
+  // effectiveBackgroundStyle() gives the canvas once it has settled. That
+  // asks about the settled canvas, though, and this one may already be back
+  // inside the image while the settled one is still grown: then the mat, and
+  // the backing and card shadow that come with one, are gone here too.
+  const bool automaticMat =
+      canvasBoundaryMode_ == CanvasBoundaryMode::Framed &&
+      backgroundStyle_ == BackgroundStyle::None &&
+      exceedsSourceFrame(canvas.rect);
+  canvas.backdrop = automaticMat ? BackgroundStyle::Slate : backgroundStyle_;
   canvas.dimmed = std::any_of(live.annotations.cbegin(),
                               live.annotations.cend(),
                               [&canvas](const Annotation &annotation) {
@@ -4597,11 +4630,11 @@ QRegion CaptureEditor::liveCanvasDamage(const LiveCanvas &before,
                                         const LiveCanvas &after) const {
   if (before == after)
     return {};
-  // The backdrop is laid out against the live canvas, so growing or shrinking
-  // it repaints every strip outside the settled one, not only the strip a
-  // carried layer happens to cover. A spotlight's dimming spans the whole
-  // live canvas: it arrives with the first pixel of a lens being dragged
-  // out, and nothing inside the settled canvas survives that either.
+  // The mat is laid out against the live canvas, so a canvas that grows or
+  // shrinks repaints all of it, not only the strip a carried layer happens to
+  // cover. A spotlight's dimming spans the whole live canvas too: it arrives
+  // with the first pixel of a lens being dragged out. Only the image itself
+  // is sure to look the same under either canvas.
   const QRectF sourceFrame = sourceFrameWidgetRect();
   const qreal scale = std::max<qreal>(editScale(), 0.001);
   const auto widgetRect = [&](const QRectF &canvas) {
@@ -4611,9 +4644,35 @@ QRegion CaptureEditor::liveCanvasDamage(const LiveCanvas &before,
   QRegion damage(widgetRect(before.rect.united(after.rect))
                      .adjusted(-2, -2, 2, 2)
                      .toAlignedRect());
-  if (!before.dimmed && !after.dimmed)
-    damage -= QRegion(
-        widgetRect(canvasRect_).adjusted(2, 2, -2, -2).toAlignedRect());
+  // The image hides the mat except through the rounded corners it has while
+  // framed at rest, so that much of its edge is never sure to be unchanged.
+  const qreal corner = kCaptureImageRadius * scale + 2.0;
+  if (!before.dimmed && !after.dimmed) {
+    // A flat mat looks the same wherever both canvases have it, so only the
+    // strips between them repaint; a gradient or picture is laid out afresh.
+    const auto flat = [](BackgroundStyle style) {
+      return style == BackgroundStyle::None || style == BackgroundStyle::Off ||
+             style == BackgroundStyle::Slate;
+    };
+    const bool sameFlatFill =
+        before.backdrop == after.backdrop && flat(after.backdrop);
+    const QRectF kept =
+        sameFlatFill ? widgetRect(before.rect.intersected(after.rect))
+                           .adjusted(2, 2, -2, -2)
+                     : sourceFrame.adjusted(corner, corner, -corner, -corner);
+    damage -= QRegion(kept.toAlignedRect());
+  }
+  // Gaining or losing the mat also swaps what the image card sits on: its
+  // frame and rounded corners at rest, its shadow, a windowed editor's halo.
+  // None of them reaches further than the export frame around the source.
+  if (exceedsSourceFrame(before.rect) != exceedsSourceFrame(after.rect)) {
+    const qreal frame = kBackdropMargin * std::max<qreal>(scale, 1.0) + 2.0;
+    damage |=
+        QRegion(sourceFrame.adjusted(-frame, -frame, frame, frame + 20.0)
+                    .toAlignedRect()) -
+        QRegion(sourceFrame.adjusted(corner, corner, -corner, -corner)
+                    .toAlignedRect());
+  }
   return damage & QRegion(rect());
 }
 
@@ -6987,12 +7046,27 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   const QRectF visibleSourceImage = sourceImage.intersected(visibleImage);
   const bool grown = canvasGrown();
   const BackgroundStyle background = effectiveBackgroundStyle();
-  const bool hasBackground =
-      background != BackgroundStyle::None &&
-      background != BackgroundStyle::Off &&
-      (background != BackgroundStyle::Custom || !customBackdrop_.isNull());
-  const bool framedBackground =
-      hasBackground && canvasBoundaryMode_ == CanvasBoundaryMode::Framed;
+  const qreal imageScale = editScale();
+  // The mat follows the canvas a carried layer previews, in both directions:
+  // it grows ahead of a layer leaving the image and gives way behind one
+  // coming back, so what is on screen is what release will settle to. With
+  // nothing carried this is the settled canvas, painted as it always was.
+  const LiveLayers live = liveLayers(cursor_);
+  const LiveCanvas canvas = liveCanvas(live);
+  const QRectF previewClip = canvas.previews ? canvas.rect : canvasRect_;
+  const qreal previewScale = std::max<qreal>(editScale(), 0.001);
+  const QRectF matRect =
+      canvas.previews
+          ? QRectF(sourceImage.topLeft() + previewClip.topLeft() * previewScale,
+                   previewClip.size() * previewScale)
+          : image;
+  const bool matGrown = canvas.previews ? exceedsSourceFrame(previewClip)
+                                        : grown;
+  const BackgroundStyle matStyle = canvas.previews ? canvas.backdrop
+                                                   : background;
+  const bool hasMat =
+      matStyle != BackgroundStyle::None && matStyle != BackgroundStyle::Off &&
+      (matStyle != BackgroundStyle::Custom || !customBackdrop_.isNull());
   // Zooming or expanding a crop at its press-time scale can exceed the
   // viewport; keep the content clear of the toolbar and status.
   const bool clipViewport =
@@ -7004,21 +7078,29 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         QRectF(0, top, width(), std::max<qreal>(1, height() - top - 58)),
         Qt::IntersectClip);
   }
-  if (grown) {
-    // Extension is the canvas itself, while the source remains the image card
-    // floating above it. Never shadow the expanded canvas edge.
-    paintCaptureBackground(painter, image, background, customBackdrop_);
-    if (imageShadow_ && hasBackground)
-      paintCaptureImageShadow(painter, sourceImage);
-  } else if (framedBackground) {
-    const QRectF backing = image.adjusted(-28, -28, 28, 28);
-    paintCaptureBackground(painter, backing, background, customBackdrop_);
-    if (imageShadow_)
-      paintCaptureImageShadow(painter, image);
+  if (matGrown || (hasMat && canvasBoundaryMode_ == CanvasBoundaryMode::Framed)) {
+    // Paint the same frame as export at the current view scale. Expanded
+    // canvases already contain the mat; only the source card gets a shadow.
+    // A preview back inside the image is framed around the source, wherever
+    // the settled canvas it is leaving still reaches.
+    const qreal margin = matGrown ? 0.0 : kBackdropMargin * imageScale;
+    const QRectF card = matGrown ? matRect
+                        : canvas.previews ? sourceImage
+                                          : image;
+    const QRectF backing = card.adjusted(-margin, -margin, margin, margin);
+    painter.save();
+    painter.setClipRect(backing, Qt::IntersectClip);
+    paintCaptureBackground(painter, backing, matStyle, customBackdrop_);
+    if (imageShadow_ && hasMat)
+      paintCaptureImageShadow(painter, sourceImage, imageScale, imageScale);
+    painter.restore();
   }
 
   QPainterPath clip;
-  const qreal sourceRadius = !grown && framedBackground ? 10.0 : 0.0;
+  const qreal sourceRadius =
+      !matGrown && hasMat && canvasBoundaryMode_ == CanvasBoundaryMode::Framed
+          ? kCaptureImageRadius * imageScale
+          : 0.0;
   clip.addRoundedRect(sourceImage, sourceRadius, sourceRadius);
   const QSize targetSize(qRound(sourceImage.width() * devicePixelRatioF()),
                          qRound(sourceImage.height() * devicePixelRatioF()));
@@ -7073,7 +7155,6 @@ void CaptureEditor::paintEdit(QPainter &painter) {
 
   QImage defaultLayerSource = redactionLayer;
   QRectF defaultLayerBounds(QPointF(), selection_.size());
-  const LiveLayers live = liveLayers(cursor_);
   const bool liveOutsidePreview = live.carried;
   const QVector<Annotation> &defaultAnnotations = live.annotations;
 
@@ -7085,32 +7166,9 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   // the background settles to its final integer bounds once on release.
   if (!liveOutsidePreview)
     painter.setClipRect(canvasRect_, Qt::IntersectClip);
-  QRectF previewClip = canvasRect_;
-  if (liveOutsidePreview && canvasBoundaryMode_ != CanvasBoundaryMode::Framed) {
-    previewClip = captureCanvasRect(selection_.size(), defaultAnnotations,
-                                    canvasBoundaryMode_);
-  }
-  if (previewClip != canvasRect_) {
-    QPainterPath overscan;
-    overscan.addRect(previewClip);
-    QPainterPath settledCanvas;
-    settledCanvas.addRect(canvasRect_);
-    overscan = overscan.subtracted(settledCanvas);
-    const bool previewGrown =
-        previewClip != QRectF(QPointF(), selection_.size());
-    const bool automaticPreviewBackground =
-        canvasBoundaryMode_ == CanvasBoundaryMode::Framed && previewGrown &&
-        backgroundStyle_ == BackgroundStyle::None;
-    const BackgroundStyle previewBackground =
-        automaticPreviewBackground ? BackgroundStyle::Slate : background;
-    painter.save();
-    painter.setClipPath(overscan, Qt::IntersectClip);
-    paintCaptureBackground(painter, previewClip, previewBackground);
-    painter.restore();
-  }
-  // Framed mode shows the complete layer while it is being carried and
-  // settles the background on release. Overflow and Image preview their final
-  // canvas bounds live.
+  // Every mode previews where a carried layer's canvas would settle. Framed
+  // leaves its layers unclipped: a drag's layer is inside that preview
+  // already, and its counter ghost floats over the surround without one.
   if (!liveOutsidePreview || canvasBoundaryMode_ != CanvasBoundaryMode::Framed)
     painter.setClipRect(previewClip, Qt::IntersectClip);
   const bool hasSpotlight = showsSpotlight(defaultAnnotations);
@@ -7133,11 +7191,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       defaultLayerSource.fill(Qt::transparent);
       QPainter basePainter(&defaultLayerSource);
       basePainter.setRenderHints(QPainter::SmoothPixmapTransform);
-      const bool automaticSpotlightBackground =
-          canvasBoundaryMode_ == CanvasBoundaryMode::Framed &&
-          spotlightGrown && backgroundStyle_ == BackgroundStyle::None;
-      const BackgroundStyle spotlightBackground =
-          automaticSpotlightBackground ? BackgroundStyle::Slate : background;
+      const BackgroundStyle spotlightBackground = canvas.backdrop;
       paintCaptureBackground(basePainter, defaultLayerSource.rect(),
                              spotlightBackground);
       const QRectF sourcePixels(-spotlightCanvas.left() * pixelScale,
