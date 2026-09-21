@@ -72,6 +72,18 @@ public:
     // a word too long to fit. The width clamp decides when wrapping bites.
     setLineWrapMode(QPlainTextEdit::NoWrap);
     document()->setDocumentMargin(0);
+    // The box is always sized to its text, so it never has anywhere to scroll.
+    // Qt does not know that: with wrapping laid out by hand it takes the draft
+    // to be as wide as its longest paragraph unwrapped, which leaves the
+    // hidden bars a range. Centring the caret at the end of a full line, or a
+    // sideways swipe on a touchpad over the box, would then shift every line
+    // out from under its pill, and nothing would bring them back.
+    for (QScrollBar *bar : {horizontalScrollBar(), verticalScrollBar()}) {
+      connect(bar, &QScrollBar::valueChanged, bar, [bar](int value) {
+        if (value != 0)
+          bar->setValue(0);
+      });
+    }
   }
   using QPlainTextEdit::cursorRect;
   using QPlainTextEdit::setViewportMargins;
