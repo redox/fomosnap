@@ -7125,9 +7125,14 @@ void CaptureEditor::paintEdit(QPainter &painter) {
           QPen(QColor(255, 255, 255, 220), 1.0 / scale, Qt::DashLine));
       painter.setBrush(Qt::NoBrush);
       const qreal boxRadius = selectionBoundsRadius(selected, 4.0);
-      if (boxRadius > 0.0)
-        painter.drawRoundedRect(bounds, boxRadius, boxRadius);
-      else
+      if (boxRadius > 0.0) {
+        // Build the dashes before clipping. Qt's clipped curve stroker can
+        // shift them between partial and full repaints of a rounded box.
+        QPainterPath outline;
+        outline.addRoundedRect(bounds, boxRadius, boxRadius);
+        const QPainterPathStroker stroker(painter.pen());
+        painter.fillPath(stroker.createStroke(outline), painter.pen().brush());
+      } else
         painter.drawRect(bounds);
     }
     if (multiple) {
