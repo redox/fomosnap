@@ -1683,6 +1683,144 @@ bool runTextDraftGrowsCanvasSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** A spotlight dims newly exposed mat while text is still a draft, including
+ *  text placed beyond a canvas that the spotlight has already expanded. */
+bool runSpotlightTextDraftCanvasSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 1600, 1000};
+  capture.monitor.pixelSize = {1600, 1000};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(600, 400, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#d8dde6")));
+  capture.previewSize = capture.source.size();
+
+  for (const auto boundaryMode : {CanvasBoundaryMode::Framed,
+                                  CanvasBoundaryMode::Overflow}) {
+    for (const bool alreadyGrown : {false, true}) {
+      for (const auto edge : {Qt::LeftEdge, Qt::TopEdge, Qt::RightEdge,
+                             Qt::BottomEdge}) {
+        Annotation spotlight;
+        spotlight.id = 1;
+        spotlight.kind = Annotation::Kind::Spotlight;
+        spotlight.start = {120, 120};
+        spotlight.end = {alreadyGrown ? 680.0 : 320.0, 260};
+        spotlight.magnification = 2.0;
+        Operation background;
+        background.type = Operation::Type::Background;
+        background.background = boundaryMode == CanvasBoundaryMode::Framed
+                                    ? BackgroundStyle::None
+                                    : BackgroundStyle::Slate;
+        background.imageShadow = false;
+        Operation boundary;
+        boundary.type = Operation::Type::CanvasBoundary;
+        boundary.canvasBoundary = boundaryMode;
+        Operation annotate;
+        annotate.type = Operation::Type::Annotate;
+        annotate.annotations = {spotlight};
+        OperationLog log;
+        log.ops = {background, boundary, annotate};
+        log.index = 3;
+        log.nextId = 2;
+        log.previewSize = capture.previewSize;
+        CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
+                             QuickOutputMode::None, log);
+        editor.setSuppressSnapshots(true);
+        editor.resize(1600, 1000);
+        editor.show();
+        application.processEvents();
+        const QRectF settled = editor.currentCanvasForTest();
+        QPointF caret(220, 180);
+        if (edge == Qt::LeftEdge)
+          caret.setX(settled.left() - 80);
+        else if (edge == Qt::TopEdge)
+          caret.setY(settled.top() - 80);
+        else if (edge == Qt::RightEdge)
+          caret.setX(settled.right() + 40);
+        else
+          caret.setY(settled.bottom() + 40);
+        QTest::keyClick(&editor, Qt::Key_T);
+        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                         editor.annotationPointToWidgetForTest(caret).toPoint());
+        auto *draft = editor.findChild<QPlainTextEdit *>();
+        if (!draft || !draft->isVisible()) {
+          error = QStringLiteral("Spotlight text draft did not open");
+          return false;
+        }
+
+        // Sample the new strip clear of the pill, glyphs, lens and outline.
+        // The flat mat must be dimmed exactly as it is after commit/export.
+        const auto dimmedMat = [&](const QString &stage) {
+          application.processEvents();
+          const QRectF canvas = editor.liveCanvasForTest();
+          QPointF probe(576, 24);
+          if (edge == Qt::LeftEdge)
+            probe.setX((settled.left() + canvas.left()) / 2.0);
+          else if (edge == Qt::TopEdge)
+            probe.setY((settled.top() + canvas.top()) / 2.0);
+          else if (edge == Qt::RightEdge)
+            probe.setX((settled.right() + canvas.right()) / 2.0);
+          else
+            probe.setY((settled.bottom() + canvas.bottom()) / 2.0);
+          if (settled.contains(probe) || !canvas.contains(probe)) {
+            error = QStringLiteral("Text draft did not expand the tested edge");
+            return false;
+          }
+          const QImage preview = editor.grab().toImage();
+          const QPoint pixel =
+              (editor.annotationPointToWidgetForTest(probe) *
+               preview.devicePixelRatio()).toPoint();
+          const QColor color = preview.pixelColor(pixel);
+          if (color.alpha() != 255 || !colorNear(color, QColor(14, 14, 14), 2)) {
+            error = QStringLiteral("Spotlight did not dim the text draft's mat "
+                                   "while %1 (%2, grown %3, edge %4): %5")
+                        .arg(stage)
+                        .arg(static_cast<int>(boundaryMode))
+                        .arg(alreadyGrown)
+                        .arg(static_cast<int>(edge))
+                        .arg(color.name(QColor::HexArgb));
+            return false;
+          }
+          return true;
+        };
+        if (!dimmedMat(QStringLiteral("placing the caret")))
+          return false;
+        QTest::keyClicks(draft, QStringLiteral("outside note"));
+        if (!dimmedMat(QStringLiteral("typing")))
+          return false;
+        QTest::keyClick(draft, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClicks(draft, QStringLiteral("note"));
+        if (!dimmedMat(QStringLiteral("shortening the text")))
+          return false;
+        const QRectF live = editor.liveCanvasForTest();
+        if (editor.currentAnnotationsForTest().size() != 1 ||
+            editor.currentCanvasForTest() != settled) {
+          error = QStringLiteral("Text draft changed the committed document");
+          return false;
+        }
+        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                         editor.annotationPointToWidgetForTest({40, 40}).toPoint());
+        if (draft->isVisible() ||
+            editor.currentAnnotationsForTest().size() != 2 ||
+            editor.currentCanvasForTest() != live ||
+            !dimmedMat(QStringLiteral("committed"))) {
+          if (error.isEmpty())
+            error = QStringLiteral("Committing spotlight text changed its canvas");
+          return false;
+        }
+        QTest::keyClick(&editor, Qt::Key_Z, Qt::ControlModifier);
+        if (editor.currentCanvasForTest() != settled ||
+            editor.currentAnnotationsForTest().size() != 1) {
+          error = QStringLiteral("Undo did not restore the spotlight canvas");
+          return false;
+        }
+        editor.close();
+      }
+    }
+  }
+  return true;
+}
+
 /** The inline editor is always sized to its text, so it has nothing to
  *  scroll to: a long wrapped draft must never end up shifted sideways with
  *  the start of every line cut off, whatever is typed or deleted. */
@@ -10696,6 +10834,10 @@ int main(int argc, char **argv) {
   if (!runTextDraftGrowsCanvasSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 140;
+  }
+  if (!runSpotlightTextDraftCanvasSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 142;
   }
   if (!runTextDraftNeverScrollsSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
