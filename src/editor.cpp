@@ -2199,14 +2199,17 @@ QRectF CaptureEditor::editImageRect() const {
       .translated(viewOffset_);
 }
 
+QRectF CaptureEditor::editViewportRect() const {
+  const qreal top = imageTopMargin();
+  return {0, top, static_cast<qreal>(width()),
+          std::max<qreal>(1, height() - top - 58)};
+}
+
 QRectF CaptureEditor::visibleEditImageRect() const {
   const QRectF image = editImageRect();
   if (viewZoom_ <= 1.0)
     return image;
-  const qreal bandTop = imageTopMargin();
-  const qreal bandBottom = 58;
-  return image.intersected(QRectF(
-      0, bandTop, width(), std::max<qreal>(1, height() - bandTop - bandBottom)));
+  return image.intersected(editViewportRect());
 }
 
 QRectF CaptureEditor::annotationWorkspaceRect() const {
@@ -4716,6 +4719,16 @@ QRegion CaptureEditor::liveCanvasDamage(const LiveCanvas &before,
     // what lies inside the image's corners is sure to be unchanged.
     damage -= QRegion(
         sourceFrame.adjusted(corner, corner, -corner, -corner).toAlignedRect());
+  }
+  // The dashed boundary runs right round the canvas, and its dashes fall
+  // differently all the way round as soon as one side moves. It is drawn
+  // around what the viewport shows of the canvas, so that is what repaints.
+  for (const QRectF &outlined : {before.rect, after.rect}) {
+    const QRectF outline = widgetRect(outlined)
+                               .intersected(editViewportRect())
+                               .adjusted(-1, -1, 1, 1);
+    damage |= QRegion(outline.adjusted(-3, -3, 3, 3).toAlignedRect()) -
+              QRegion(outline.adjusted(3, 3, -3, -3).toAlignedRect());
   }
   // Gaining or losing the mat also swaps what the image card sits on: its
   // frame and rounded corners at rest, its shadow, a windowed editor's halo.
@@ -7506,8 +7519,11 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   painter.setOpacity(cropAvailable ? 1.0 : 0.6);
   painter.setPen(QPen(QColor(QStringLiteral("#0a84ff")), 1, Qt::DashLine));
   painter.setBrush(Qt::NoBrush);
-  painter.drawRect(visibleImage.adjusted(-1, -1, 1, 1));
-  if (grown && !visibleSourceImage.isEmpty()) {
+  // The boundary belongs to the canvas on screen, so it goes with the one a
+  // carried layer previews rather than staying behind inside a growing mat.
+  const QRectF visibleMat = matRect.intersected(editViewportRect());
+  painter.drawRect(visibleMat.adjusted(-1, -1, 1, 1));
+  if (matGrown && !visibleSourceImage.isEmpty()) {
     painter.setPen(QPen(QColor(10, 132, 255, 100), 1, Qt::DashLine));
     painter.drawRect(visibleSourceImage);
   }
