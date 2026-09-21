@@ -7,6 +7,7 @@
 #include "cut-mapping-smoke.hpp"
 #include "cut-smoke.hpp"
 #include "editor.hpp"
+#include "selection-repaint-smoke.hpp"
 #include "overlay-chrome.hpp"
 #include "recent-snaps.hpp"
 #include "instance-lock-smoke.hpp"
@@ -10221,6 +10222,10 @@ int main(int argc, char **argv) {
   if (!runPointerDamageRegionCheck(snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 135;
+  }
+  if (!runSelectionRepaintSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 215;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
