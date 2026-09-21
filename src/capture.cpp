@@ -163,17 +163,24 @@ QRectF annotationTextBounds(const Annotation &annotation, qreal canvasWidth) {
   return glyphs.adjusted(-pad, -pad, pad, bottom - metrics.descent());
 }
 
-QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
-                         const QVector<Annotation> &annotations,
-                         CanvasBoundaryMode boundaryMode) {
-  const QRectF sourceFrame(QPointF(), sourceFrameSize);
-  if (sourceFrame.isEmpty())
-    return {};
-  if (boundaryMode == CanvasBoundaryMode::Image)
-    return sourceFrame;
+qreal annotationPenWidth(const Annotation &annotation) {
+  switch (annotation.kind) {
+  case Annotation::Kind::Highlighter:
+    return std::max<qreal>(6.0, annotation.size * 3.0);
+  case Annotation::Kind::Freehand:
+  case Annotation::Kind::Line:
+    return std::max<qreal>(2.0, annotation.size);
+  case Annotation::Kind::Rectangle:
+  case Annotation::Kind::Ellipse:
+    return annotation.filled ? 0.0 : std::max<qreal>(2.0, annotation.size);
+  case Annotation::Kind::Spotlight:
+    return std::max<qreal>(1.0, annotation.size / 2.0);
+  default:
+    return 0.0;
+  }
+}
 
-  QRectF canvas = sourceFrame;
-
+QRectF annotationPaintedBounds(const Annotation &annotation) {
   const auto pointBounds = [](const QVector<QPointF> &points) {
     if (points.isEmpty())
       return QRectF();
@@ -189,56 +196,53 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
     }
     return QRectF(QPointF(left, top), QPointF(right, bottom));
   };
-  const auto paintedBounds = [&](const Annotation &annotation) {
-    // Redaction only replaces pixels inside the source frame. Its geometry
-    // can extend past that frame, but there are no painted pixels there for a
-    // larger canvas to reveal.
-    if (annotation.kind == Annotation::Kind::Redaction)
+  // Redaction only replaces pixels inside the source frame. Its geometry
+  // can extend past that frame, but there are no painted pixels there for a
+  // larger canvas to reveal.
+  if (annotation.kind == Annotation::Kind::Redaction)
+    return QRectF();
+  if (annotation.kind == Annotation::Kind::Text)
+    return annotationTextBounds(annotation).adjusted(-1, -1, 1, 1);
+  if (annotation.kind == Annotation::Kind::Marker) {
+    const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
+    const qreal antialias =
+        std::max<qreal>(1.0, annotation.size * 0.35) / 2.0 + 1.0;
+    return QRectF(annotation.start.x() - diameter / 2.0,
+                  annotation.start.y() - diameter / 2.0, diameter, diameter)
+        .adjusted(-antialias, -antialias, antialias, antialias);
+  }
+  if (annotation.kind == Annotation::Kind::Freehand ||
+      annotation.kind == Annotation::Kind::Highlighter) {
+    if (annotation.points.size() < 2)
       return QRectF();
-    if (annotation.kind == Annotation::Kind::Text)
-      return annotationTextBounds(annotation).adjusted(-1, -1, 1, 1);
-    if (annotation.kind == Annotation::Kind::Marker) {
-      const qreal diameter = std::max<qreal>(24.0, annotation.size * 6.0);
-      const qreal antialias =
-          std::max<qreal>(1.0, annotation.size * 0.35) / 2.0 + 1.0;
-      return QRectF(annotation.start.x() - diameter / 2.0,
-                    annotation.start.y() - diameter / 2.0, diameter, diameter)
-          .adjusted(-antialias, -antialias, antialias, antialias);
-    }
-    if (annotation.kind == Annotation::Kind::Freehand ||
-        annotation.kind == Annotation::Kind::Highlighter) {
-      if (annotation.points.size() < 2)
-        return QRectF();
-      const qreal width =
-          annotation.kind == Annotation::Kind::Highlighter
-              ? std::max<qreal>(6.0, annotation.size * 3.0)
-              : std::max<qreal>(2.0, annotation.size);
-      const qreal extent = width / 2.0 + 1.0;
-      return pointBounds(annotation.points)
-          .adjusted(-extent, -extent, extent, extent);
-    }
+    const qreal extent = annotationPenWidth(annotation) / 2.0 + 1.0;
+    return pointBounds(annotation.points)
+        .adjusted(-extent, -extent, extent, extent);
+  }
 
-    QRectF bounds(annotation.start, annotation.end);
-    bounds = bounds.normalized();
-    if (annotation.kind == Annotation::Kind::Arrow) {
-      const QRectF visual = arrowVisualBounds(annotation);
-      return visual.isEmpty() ? QRectF() : visual.adjusted(-1, -1, 1, 1);
-    }
-    qreal extent = 1.0;
-    if (annotation.kind == Annotation::Kind::Line ||
-        annotation.kind == Annotation::Kind::Arrow ||
-        ((annotation.kind == Annotation::Kind::Rectangle ||
-          annotation.kind == Annotation::Kind::Ellipse) &&
-         !annotation.filled)) {
-      extent += std::max<qreal>(2.0, annotation.size) / 2.0;
-    } else if (annotation.kind == Annotation::Kind::Spotlight) {
-      extent += std::max<qreal>(1.0, annotation.size / 2.0) / 2.0;
-    }
-    return bounds.adjusted(-extent, -extent, extent, extent);
-  };
+  QRectF bounds(annotation.start, annotation.end);
+  bounds = bounds.normalized();
+  if (annotation.kind == Annotation::Kind::Arrow) {
+    const QRectF visual = arrowVisualBounds(annotation);
+    return visual.isEmpty() ? QRectF() : visual.adjusted(-1, -1, 1, 1);
+  }
+  const qreal extent = annotationPenWidth(annotation) / 2.0 + 1.0;
+  return bounds.adjusted(-extent, -extent, extent, extent);
+}
+
+QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
+                         const QVector<Annotation> &annotations,
+                         CanvasBoundaryMode boundaryMode) {
+  const QRectF sourceFrame(QPointF(), sourceFrameSize);
+  if (sourceFrame.isEmpty())
+    return {};
+  if (boundaryMode == CanvasBoundaryMode::Image)
+    return sourceFrame;
+
+  QRectF canvas = sourceFrame;
 
   for (const Annotation &annotation : annotations) {
-    const QRectF bounds = paintedBounds(annotation);
+    const QRectF bounds = annotationPaintedBounds(annotation);
     if (!bounds.isNull())
       canvas = canvas.united(bounds);
   }
@@ -724,6 +728,14 @@ QPainterPath spotlightPath(const Annotation &annotation) {
   return path;
 }
 
+bool spotlightOpens(const Annotation &annotation, const QRectF &bounds) {
+  if (annotation.kind != Annotation::Kind::Spotlight)
+    return false;
+  const QRectF lens =
+      QRectF(annotation.start, annotation.end).normalized().intersected(bounds);
+  return lens.width() >= 1 && lens.height() >= 1;
+}
+
 void paintSpotlights(QPainter &painter, const QImage &source,
                      const QRectF &targetBounds, const QRectF &sourceRect,
                      const QVector<Annotation> &annotations) {
@@ -734,12 +746,7 @@ void paintSpotlights(QPainter &painter, const QImage &source,
   QPainterPath dimmed;
   dimmed.addRect(targetBounds);
   for (const Annotation &annotation : annotations) {
-    if (annotation.kind != Annotation::Kind::Spotlight)
-      continue;
-    const QRectF lens =
-        QRectF(annotation.start, annotation.end).normalized().intersected(
-            targetBounds);
-    if (lens.width() < 1 || lens.height() < 1)
+    if (!spotlightOpens(annotation, targetBounds))
       continue;
     QPainterPath opening = spotlightPath(annotation);
     QPainterPath targetClip;
