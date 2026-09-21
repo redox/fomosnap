@@ -318,18 +318,34 @@ void paintAnnotation(QPainter &painter, const Annotation &annotation,
                                       const QPointF &point,
                                       qreal tolerance = 0.0);
 [[nodiscard]] QPainterPath spotlightPath(const Annotation &annotation);
+/**
+ * Pixels of a composed canvas that the spotlights among `annotations`
+ * magnify, when all of that canvas (`sourceRect`) maps onto `targetBounds`.
+ * Lenses read a fraction of their own area, so a caller that composes the
+ * canvas on every paint needs only this much of it. Null when none opens.
+ */
+[[nodiscard]] QRectF spotlightSampleBounds(const QVector<Annotation> &annotations,
+                                           const QRectF &targetBounds,
+                                           const QRectF &sourceRect);
+/** `sourceRect` is the whole composed canvas in source pixels. `source` holds
+ *  all of it, or only the part that starts at `sourceOrigin` within it. */
 void paintSpotlights(QPainter &painter, const QImage &source,
                      const QRectF &targetBounds, const QRectF &sourceRect,
-                     const QVector<Annotation> &annotations);
+                     const QVector<Annotation> &annotations,
+                     const QPoint &sourceOrigin = {});
 /**
  * Paints the default annotation layer (spotlights, then vectors) in selection
  * space. Spotlights sample `redacted`, which must already include the
- * redaction layer so a loupe cannot magnify source pixels.
+ * redaction layer so a loupe cannot magnify source pixels. A null
+ * `sourceRect` means `redacted` is the whole canvas; otherwise the two follow
+ * paintSpotlights().
  */
 void paintDefaultLayer(QPainter &painter, const QImage &redacted,
                        const QRectF &logicalBounds,
                        const QVector<Annotation> &annotations,
-                       qreal arrowDisplayScale = 1.0);
+                       qreal arrowDisplayScale = 1.0,
+                       const QRectF &sourceRect = {},
+                       const QPoint &sourceOrigin = {});
 /** `customBackdrop` is the image drawn (cover-fit) for
  *  `BackgroundStyle::Custom`; a null image there paints nothing, same as
  *  `BackgroundStyle::None`. */

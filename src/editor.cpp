@@ -4647,20 +4647,32 @@ QRegion CaptureEditor::liveCanvasDamage(const LiveCanvas &before,
   // The image hides the mat except through the rounded corners it has while
   // framed at rest, so that much of its edge is never sure to be unchanged.
   const qreal corner = kCaptureImageRadius * scale + 2.0;
-  if (!before.dimmed && !after.dimmed) {
-    // A flat mat looks the same wherever both canvases have it, so only the
-    // strips between them repaint; a gradient or picture is laid out afresh.
-    const auto flat = [](BackgroundStyle style) {
-      return style == BackgroundStyle::None || style == BackgroundStyle::Off ||
-             style == BackgroundStyle::Slate;
-    };
-    const bool sameFlatFill =
-        before.backdrop == after.backdrop && flat(after.backdrop);
-    const QRectF kept =
-        sameFlatFill ? widgetRect(before.rect.intersected(after.rect))
-                           .adjusted(2, 2, -2, -2)
-                     : sourceFrame.adjusted(corner, corner, -corner, -corner);
-    damage -= QRegion(kept.toAlignedRect());
+  const auto flat = [](BackgroundStyle style) {
+    return style == BackgroundStyle::None || style == BackgroundStyle::Off ||
+           style == BackgroundStyle::Slate;
+  };
+  const bool sameFlatFill =
+      before.backdrop == after.backdrop && flat(after.backdrop);
+  if (sameFlatFill && before.dimmed == after.dimmed) {
+    // A flat mat, dimmed or not, looks the same wherever both canvases have
+    // it, so only the strips between them repaint. Lenses are the exception:
+    // what one magnifies is placed against the canvas it sits in.
+    damage -= QRegion(widgetRect(before.rect.intersected(after.rect))
+                          .adjusted(2, 2, -2, -2)
+                          .toAlignedRect());
+    if (after.dimmed) {
+      for (const Annotation &annotation : annotations_) {
+        if (annotation.kind == Annotation::Kind::Spotlight)
+          damage |= QRegion(widgetRect(annotationPaintedBounds(annotation))
+                                .adjusted(-2, -2, 2, 2)
+                                .toAlignedRect());
+      }
+    }
+  } else if (!before.dimmed && !after.dimmed) {
+    // A gradient or picture is laid out afresh against the new canvas; only
+    // what lies inside the image's corners is sure to be unchanged.
+    damage -= QRegion(
+        sourceFrame.adjusted(corner, corner, -corner, -corner).toAlignedRect());
   }
   // Gaining or losing the mat also swaps what the image card sits on: its
   // frame and rounded corners at rest, its shadow, a windowed editor's halo.
@@ -7155,6 +7167,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
 
   QImage defaultLayerSource = redactionLayer;
   QRectF defaultLayerBounds(QPointF(), selection_.size());
+  QRectF defaultLayerSourceRect; // null: the source image is the whole canvas
+  QPoint defaultLayerSourceOrigin;
   const bool liveOutsidePreview = live.carried;
   const QVector<Annotation> &defaultAnnotations = live.annotations;
 
@@ -7186,13 +7200,27 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       const QSize canvasPixels(
           std::max(1, qCeil(spotlightCanvas.width() * pixelScale)),
           std::max(1, qCeil(spotlightCanvas.height() * pixelScale)));
+      // Compose only the patch the lenses magnify, a fraction of their own
+      // area: a whole 6K canvas on every paint, pointer hover included, costs
+      // tens of milliseconds. Everything below still draws in whole-canvas
+      // pixels; the painter is merely moved so that patch lands at its origin.
+      defaultLayerSourceRect = QRectF(QPointF(), QSizeF(canvasPixels));
+      const QRect patch =
+          spotlightSampleBounds(defaultAnnotations, spotlightCanvas,
+                                defaultLayerSourceRect)
+              .toAlignedRect()
+              .adjusted(-2, -2, 2, 2)
+              .intersected(QRect(QPoint(), canvasPixels));
+      defaultLayerSourceOrigin = patch.topLeft();
       defaultLayerSource =
-          QImage(canvasPixels, QImage::Format_ARGB32_Premultiplied);
+          QImage(patch.isEmpty() ? QSize(1, 1) : patch.size(),
+                 QImage::Format_ARGB32_Premultiplied);
       defaultLayerSource.fill(Qt::transparent);
       QPainter basePainter(&defaultLayerSource);
+      basePainter.translate(-defaultLayerSourceOrigin);
       basePainter.setRenderHints(QPainter::SmoothPixmapTransform);
       const BackgroundStyle spotlightBackground = canvas.backdrop;
-      paintCaptureBackground(basePainter, defaultLayerSource.rect(),
+      paintCaptureBackground(basePainter, defaultLayerSourceRect,
                              spotlightBackground);
       const QRectF sourcePixels(-spotlightCanvas.left() * pixelScale,
                                 -spotlightCanvas.top() * pixelScale,
@@ -7214,7 +7242,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   // so a spotlight carried past the old frame has valid pixels to sample.
   if (!defaultLayerSource.isNull()) {
     paintDefaultLayer(painter, defaultLayerSource, defaultLayerBounds,
-                      defaultAnnotations, editScale());
+                      defaultAnnotations, editScale(), defaultLayerSourceRect,
+                      defaultLayerSourceOrigin);
   } else {
     for (const Annotation &annotation : defaultAnnotations)
       paintAnnotation(painter, annotation, selection_.width(), editScale());

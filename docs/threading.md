@@ -86,6 +86,12 @@ first pixel of a lens being dragged out, not on the press.
 `QWidget::grab()` repaints everything and so can never see a missed pixel; the
 smoke suite compares it against the backing store in the middle of a drag.
 
+Bounded damage only helps if painting is bounded too. A spotlight magnifies
+the composed canvas (mat, shadow, redacted image), and composing all of that at
+display resolution cost tens of milliseconds on every paint however small the
+damage. `paintEdit()` composes just the patch `spotlightSampleBounds()` says
+the lenses read, which is a fraction of their own area.
+
 ## The one documented exception
 
 Before any window exists — single-instance handover in `src/instance-lock.cpp`,

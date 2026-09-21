@@ -741,9 +741,54 @@ bool spotlightOpens(const Annotation &annotation, const QRectF &bounds) {
   return lens.width() >= 1 && lens.height() >= 1;
 }
 
+namespace {
+/** Source pixels a spotlight's lens magnifies, when `sourceRect` is the
+ *  composed canvas that maps onto `targetBounds`. */
+QRectF spotlightSample(const Annotation &annotation,
+                       const QRectF &targetBounds, const QRectF &sourceRect) {
+  const QRectF lens = QRectF(annotation.start, annotation.end).normalized();
+  const qreal magnification = std::clamp(annotation.magnification, 1.0, 4.0);
+  QSizeF sampleSize(sourceRect.width() * lens.width() / targetBounds.width() /
+                        magnification,
+                    sourceRect.height() * lens.height() /
+                        targetBounds.height() / magnification);
+  sampleSize.setWidth(std::min(sampleSize.width(), sourceRect.width()));
+  sampleSize.setHeight(std::min(sampleSize.height(), sourceRect.height()));
+  const QPointF normalizedCenter(
+      (lens.center().x() - targetBounds.left()) / targetBounds.width(),
+      (lens.center().y() - targetBounds.top()) / targetBounds.height());
+  const QPointF sampleCenter(
+      sourceRect.left() + normalizedCenter.x() * sourceRect.width(),
+      sourceRect.top() + normalizedCenter.y() * sourceRect.height());
+  QRectF sample(sampleCenter.x() - sampleSize.width() / 2.0,
+                sampleCenter.y() - sampleSize.height() / 2.0,
+                sampleSize.width(), sampleSize.height());
+  sample.moveLeft(std::clamp(sample.left(), sourceRect.left(),
+                             sourceRect.right() - sample.width()));
+  sample.moveTop(std::clamp(sample.top(), sourceRect.top(),
+                            sourceRect.bottom() - sample.height()));
+  return sample;
+}
+} // namespace
+
+QRectF spotlightSampleBounds(const QVector<Annotation> &annotations,
+                             const QRectF &targetBounds,
+                             const QRectF &sourceRect) {
+  QRectF bounds;
+  if (targetBounds.isEmpty() || sourceRect.isEmpty())
+    return bounds;
+  for (const Annotation &annotation : annotations) {
+    if (spotlightOpens(annotation, targetBounds))
+      bounds = bounds.united(
+          spotlightSample(annotation, targetBounds, sourceRect));
+  }
+  return bounds;
+}
+
 void paintSpotlights(QPainter &painter, const QImage &source,
                      const QRectF &targetBounds, const QRectF &sourceRect,
-                     const QVector<Annotation> &annotations) {
+                     const QVector<Annotation> &annotations,
+                     const QPoint &sourceOrigin) {
   if (source.isNull() || targetBounds.isEmpty() || sourceRect.isEmpty())
     return;
 
@@ -768,26 +813,10 @@ void paintSpotlights(QPainter &painter, const QImage &source,
   painter.fillPath(dimmed, QColor(0, 0, 0, 154));
   for (const Annotation *annotation : spotlights) {
     const QRectF lens = QRectF(annotation->start, annotation->end).normalized();
-    const qreal magnification = std::clamp(annotation->magnification, 1.0, 4.0);
-    QSizeF sampleSize(sourceRect.width() * lens.width() / targetBounds.width() /
-                          magnification,
-                      sourceRect.height() * lens.height() /
-                          targetBounds.height() / magnification);
-    sampleSize.setWidth(std::min(sampleSize.width(), sourceRect.width()));
-    sampleSize.setHeight(std::min(sampleSize.height(), sourceRect.height()));
-    const QPointF normalizedCenter(
-        (lens.center().x() - targetBounds.left()) / targetBounds.width(),
-        (lens.center().y() - targetBounds.top()) / targetBounds.height());
-    const QPointF sampleCenter(
-        sourceRect.left() + normalizedCenter.x() * sourceRect.width(),
-        sourceRect.top() + normalizedCenter.y() * sourceRect.height());
-    QRectF sample(sampleCenter.x() - sampleSize.width() / 2.0,
-                  sampleCenter.y() - sampleSize.height() / 2.0,
-                  sampleSize.width(), sampleSize.height());
-    sample.moveLeft(std::clamp(sample.left(), sourceRect.left(),
-                               sourceRect.right() - sample.width()));
-    sample.moveTop(std::clamp(sample.top(), sourceRect.top(),
-                              sourceRect.bottom() - sample.height()));
+    // `source` may hold only the part of the canvas the lenses read; a whole
+    // pixel offset moves the sample into it without disturbing its phase.
+    const QRectF sample = spotlightSample(*annotation, targetBounds, sourceRect)
+                              .translated(-QPointF(sourceOrigin));
 
     const QPainterPath lensClip = spotlightPath(*annotation);
     painter.save();
@@ -812,9 +841,11 @@ void paintSpotlights(QPainter &painter, const QImage &source,
 void paintDefaultLayer(QPainter &painter, const QImage &redacted,
                        const QRectF &logicalBounds,
                        const QVector<Annotation> &annotations,
-                       qreal arrowDisplayScale) {
-  paintSpotlights(painter, redacted, logicalBounds, QRectF(redacted.rect()),
-                  annotations);
+                       qreal arrowDisplayScale, const QRectF &sourceRect,
+                       const QPoint &sourceOrigin) {
+  paintSpotlights(painter, redacted, logicalBounds,
+                  sourceRect.isNull() ? QRectF(redacted.rect()) : sourceRect,
+                  annotations, sourceOrigin);
   // What a capture is annotated *with* goes over what it is annotated *on*:
   // text, then counters, after everything else. A label buried under a
   // rectangle is a label nobody can read, and the number that points at it
