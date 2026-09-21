@@ -339,6 +339,7 @@ public:
   /// annotation-space-to-widget scale. Test accessor: lets a test compute
   /// exact click/expectation points from real geometry instead of hand math.
   [[nodiscard]] QRectF editImageRectForTest() const { return editImageRect(); }
+  [[nodiscard]] QRectF editViewportRectForTest() const { return editViewportRect(); }
   [[nodiscard]] qreal editScaleForTest() const { return editScale(); }
   [[nodiscard]] QPointF toAnnotationPointForTest(const QPointF &widget) const {
     return toAnnotationPoint(widget);
@@ -436,6 +437,9 @@ private:
   /// runs beyond the band; the chrome that frames it (crop outline, handles,
   /// shadow) frames what is visible, not the off-screen edges.
   [[nodiscard]] QRectF visibleEditImageRect() const;
+  /// Band between the toolbar and the status pill. Crop chrome and the
+  /// dashed canvas outline stay inside it when the image is zoomed.
+  [[nodiscard]] QRectF editViewportRect() const;
   /// baseImageRect transformed by the current view zoom and pan (content and
   /// annotations map through this). Crop drags hold the source mapping fixed
   /// until release. Otherwise equals baseImageRect at zoom 1.

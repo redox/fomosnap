@@ -1492,6 +1492,29 @@ bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
         "Framed canvas did not grow its mat while the layer was carried");
     return false;
   }
+  // The dashed image boundary goes with that canvas rather than staying
+  // behind inside the mat: somewhere along the live right edge there is a
+  // dash, which is neither mat nor the dimmed surround beyond it.
+  {
+    const QImage carried = editor.grab().toImage();
+    const int edge = qRound(frame.left() + editor.liveCanvasForTest().right() *
+                                               editor.editScaleForTest());
+    bool outlined = false;
+    for (int y = qRound(frame.top()); y < qRound(frame.top()) + 60; ++y) {
+      for (int x = edge - 1; x <= edge + 2; ++x) {
+        // A one-pixel dash at part opacity straddles two pixels, so it is
+        // told from the mat and the black surround by having any colour.
+        const QColor color = carried.pixelColor(x, y);
+        outlined = outlined ||
+                   std::max({color.red(), color.green(), color.blue()}) > 60;
+      }
+    }
+    if (!outlined) {
+      error = QStringLiteral(
+          "Image boundary did not follow the canvas a carried layer previews");
+      return false;
+    }
+  }
   // Carried back inside, the preview goes with it.
   QTest::mouseMove(&editor, from + QPoint(60, 0));
   if (matAt(probe)) {
