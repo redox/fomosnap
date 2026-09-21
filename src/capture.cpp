@@ -40,6 +40,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/// Mat a Framed canvas keeps beyond a layer that outgrew the normal frame.
+constexpr qreal kFramedLayerMargin = 15.0;
+
 bool loadCaptureFonts() {
   static const std::array<int, 3> fontIds{
       QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Neucha.ttf")),
@@ -261,16 +264,20 @@ QRectF captureCanvasRect(const QSizeF &sourceFrameSize,
   }
 
   // Framed mode begins with the same frame as a regular backdrop, then
-  // extends only a side whose annotation exceeds it. Source and layer
-  // coordinates stay fixed.
+  // extends only a side whose annotation exceeds it, keeping a little mat
+  // beyond that layer so it never ends flush against the edge. Source and
+  // layer coordinates stay fixed.
   const QRectF backdropFrame = sourceFrame.adjusted(
       -kBackdropMargin, -kBackdropMargin, kBackdropMargin, kBackdropMargin);
-  const qreal left = std::floor(std::min(canvas.left(), backdropFrame.left()));
-  const qreal top = std::floor(std::min(canvas.top(), backdropFrame.top()));
+  const QRectF layers =
+      canvas.adjusted(-kFramedLayerMargin, -kFramedLayerMargin,
+                      kFramedLayerMargin, kFramedLayerMargin);
+  const qreal left = std::floor(std::min(layers.left(), backdropFrame.left()));
+  const qreal top = std::floor(std::min(layers.top(), backdropFrame.top()));
   const qreal right =
-      std::ceil(std::max(canvas.right(), backdropFrame.right()));
+      std::ceil(std::max(layers.right(), backdropFrame.right()));
   const qreal bottom =
-      std::ceil(std::max(canvas.bottom(), backdropFrame.bottom()));
+      std::ceil(std::max(layers.bottom(), backdropFrame.bottom()));
   return {left, top, right - left, bottom - top};
 }
 

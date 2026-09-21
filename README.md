@@ -31,7 +31,8 @@ global hotkey were rewritten against macOS frameworks.
   fullscreen workspace around a screenshot, or resize and carry an existing
   layer past its edge, to grow the canvas. Source-based tools (redact, cut,
   OCR, and eyedropper) stay on the screenshot.
-  Framed growth is the default; `G` cycles to tight Overflow growth (only the
+  Framed growth is the default, with 15 px of mat kept beyond any layer that
+  outgrows the normal frame; `G` cycles to tight Overflow growth (only the
   sides needed by annotations, with no frame), then Image (the original canvas
   size, clipping every outside annotation). `Shift+G` cycles backward without
   changing layer geometry. New framed strips start in window gray with the

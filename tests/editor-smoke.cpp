@@ -4942,7 +4942,9 @@ bool runCanvasBoundaryModeSmoke(QApplication &application, QString &error) {
   const QRectF imageCanvas = captureCanvasRect(
       sourceFrame.size(), {outside}, CanvasBoundaryMode::Image);
   if (captureCanvasRect(sourceFrame.size(), {outside}) != framedCanvas ||
-      framedCanvas != QRectF(-64, -64, 327, 228) ||
+      // Right edge: the box's stroke ends at 263, plus Framed's 15 px of mat
+      // beyond a layer that outgrows the normal 64 px frame.
+      framedCanvas != QRectF(-64, -64, 342, 228) ||
       overflowCanvas != QRectF(0, 0, 263, 100) ||
       imageCanvas != sourceFrame ||
       captureCanvasRect(sourceFrame.size(), {},
@@ -11780,8 +11782,10 @@ int main(int argc, char **argv) {
       slateShadowProfile.back() == slate.red();
   const bool restrainedShadowStrength =
       bottomShadowProfile.front() >= 20 && slateShadowProfile.front() >= 20;
-  if (grownCanvas != QRectF(-64, -64, 228, 228) ||
-      grownExport.size() != QSize(228, 228) || !paintedOutsideSource ||
+  // The box's stroke ends at 153, inside the 64 px frame but closer to its
+  // edge than Framed's 15 px of mat allows, so that side reaches 168.
+  if (grownCanvas != QRectF(-64, -64, 232, 228) ||
+      grownExport.size() != QSize(232, 228) || !paintedOutsideSource ||
       grownExport.pixelColor(grownOrigin) != QColor(Qt::white) ||
       slateExport.size() != grownExport.size() ||
       slateExport.pixelColor(grownOrigin + QPoint(99, 90)) !=
@@ -11797,7 +11801,7 @@ int main(int argc, char **argv) {
       !restrainedShadowStrength ||
       !scaleIndependentShadow ||
       slateExport.pixelColor(grownOrigin + QPoint(152, 90)) != slate ||
-      highDpiGrowthExport.size() != QSize(456, 456) ||
+      highDpiGrowthExport.size() != QSize(464, 456) ||
       highDpiGrowthExport.pixelColor(highDpiGrowthOrigin + QPoint(199, 180)) !=
           QColor(Qt::white) ||
       !isSlateShadow(highDpiGrowthExport.pixelColor(highDpiGrowthOrigin +
