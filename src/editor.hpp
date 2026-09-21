@@ -819,6 +819,9 @@ private:
   bool dragChanged_ = false;
   QString snapshotPath_;
   QuickOutputMode quickOutputMode_ = QuickOutputMode::None;
+  // E/A can temporarily replace automatic output with annotation, then
+  // restore the original destination (including explicit --copy/--save).
+  QuickOutputMode captureOutputBeforeEdit_ = QuickOutputMode::Copy;
   int pinCount_ = 0;
   QString status_ =
       QStringLiteral("Drag to select an area · Space selects a window");

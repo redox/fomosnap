@@ -32,6 +32,8 @@ flatten or repaint the full capture. **Nothing is baked into the working
 image as you draw.** Add a rectangle, change your mind, delete it — the
 source pixels underneath were never touched.
 
+`E` or `A` in the capture overlay toggles whether that shot, including a
+scrolling capture, opens in the editor or takes the quick-output path.
 Output happens at exactly three moments, all user-initiated: **Copy**,
 **Save**, or both together (`CaptureEditor::finish()`), plus pinning a
 snapshot. Each of those calls `renderCapture` once, off the UI thread (see
