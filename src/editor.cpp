@@ -3573,6 +3573,27 @@ bool CaptureEditor::textEditing() const {
   return textEditor_ && textEditor_->isVisible();
 }
 
+Annotation CaptureEditor::draftTextAnnotation() const {
+  Annotation draft;
+  draft.kind = Annotation::Kind::Text;
+  draft.size = textSize_;
+  draft.textFont = textEditFont_;
+  draft.text = textEditor_->toPlainText();
+  draft.color = textColor_;
+  draft.textBackground =
+      textEditPill_ ? TextBackground::Pill
+      : editingAnnotation_ >= 0 && editingAnnotation_ < annotations_.size()
+          ? annotations_.at(editingAnnotation_).textBackground
+          : textBackground_;
+  const QFontMetricsF metrics(annotationTextFont(textSize_, textEditFont_));
+  draft.start = textPoint_ + QPointF(0, metrics.ascent());
+  // The width the draft wraps to now: its own, or the room left before the
+  // settled canvas edge, which is the shape acceptText() freezes on commit.
+  draft.textWidth = textEditWrapWidth_;
+  draft.textWidth = annotationTextWrapWidth(draft, canvasRect_.right());
+  return draft;
+}
+
 void CaptureEditor::beginText(const QPointF &point, int annotationIndex,
                               int lineCapacity) {
   ensureTextEditor();
@@ -4600,14 +4621,24 @@ CaptureEditor::liveCanvas(const LiveLayers &live) const {
   // a hovering counter ghost must not pop that in and out at the image edge.
   const bool layerDrag = dragging_ && interaction_ < Interaction::CropTopLeft &&
                          !marqueeSelecting_;
+  // A label being typed is a layer in all but the log: the canvas makes room
+  // the moment its caret lands outside and keeps pace with every keystroke,
+  // rather than flashing away when the drag that placed it ends.
+  const bool typing = textEditing();
   LiveCanvas canvas;
-  canvas.previews = canvasBoundaryMode_ == CanvasBoundaryMode::Framed
-                        ? layerDrag
-                        : live.carried;
-  canvas.rect = canvas.previews || showsSpotlight(live.annotations)
-                    ? captureCanvasRect(selection_.size(), live.annotations,
-                                        canvasBoundaryMode_)
-                    : canvasRect_;
+  canvas.previews = typing ||
+                    (canvasBoundaryMode_ == CanvasBoundaryMode::Framed
+                         ? layerDrag
+                         : live.carried);
+  if (canvas.previews || showsSpotlight(live.annotations)) {
+    QVector<Annotation> layers = live.annotations;
+    if (typing)
+      layers.push_back(draftTextAnnotation());
+    canvas.rect =
+        captureCanvasRect(selection_.size(), layers, canvasBoundaryMode_);
+  } else {
+    canvas.rect = canvasRect_;
+  }
   // Framed growth with no backdrop chosen gets the window-gray mat, as
   // effectiveBackgroundStyle() gives the canvas once it has settled. That
   // asks about the settled canvas, though, and this one may already be back
@@ -7190,9 +7221,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
     // Spotlights sample the complete composed canvas. Build that source only
     // when one is present; a dragged preview may temporarily make it larger
     // than the settled canvas, so its opening stays live beyond the old edge.
-    const QRectF spotlightCanvas =
-        captureCanvasRect(selection_.size(), defaultAnnotations,
-                          canvasBoundaryMode_);
+    const QRectF spotlightCanvas = canvas.rect;
     const bool spotlightGrown = spotlightCanvas !=
                                 QRectF(QPointF(), selection_.size());
     if (grown || spotlightGrown) {
@@ -7431,15 +7460,7 @@ void CaptureEditor::paintEdit(QPainter &painter) {
       // The widget keeps typing slack (a 48px floor plus room for the next
       // glyph), so its geometry cannot shape the pill. Rebuild the committed
       // pill's rect from the draft text instead, so nothing shifts on commit.
-      Annotation draft;
-      draft.kind = Annotation::Kind::Text;
-      draft.size = textSize_;
-      draft.textFont = textEditFont_;
-      draft.text = textEditor_->toPlainText();
-      draft.textWidth = textEditWrapWidth_;
-      const QFontMetricsF metrics(annotationTextFont(textSize_, textEditFont_));
-      draft.start = textPoint_ + QPointF(0, metrics.ascent());
-      const QRectF pill = annotationTextBounds(draft, canvasRect_.right());
+      const QRectF pill = annotationTextBounds(draftTextAnnotation());
       painter.save();
       painter.translate(sourceFrameWidgetRect().topLeft());
       painter.scale(editScale(), editScale());
