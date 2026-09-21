@@ -674,6 +674,13 @@ void applyRedactions(QImage &image, const QVector<Annotation> &annotations,
   }
 }
 
+QSizeF captureOutputScale(const CaptureData &capture) {
+  if (capture.monitor.scale > 1.0 && !capture.preserveSourceResolution)
+    return {capture.monitor.scale, capture.monitor.scale};
+  return {capture.source.width() / static_cast<qreal>(capture.previewSize.width()),
+          capture.source.height() / static_cast<qreal>(capture.previewSize.height())};
+}
+
 QRect pixelSelection(const CaptureData &capture, const QRectF &selection) {
   const QRectF bounded = selection.normalized().intersected(
       QRectF(QPointF(), capture.previewSize));
@@ -1075,8 +1082,9 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   // A document already has its final pixels. Its integer logical size can
   // round at fractional scales; do not resize the image to undo that rounding.
   const bool highDpi = capture.monitor.scale > 1.0 && !capture.preserveSourceResolution;
-  const qreal scaleX = highDpi ? capture.monitor.scale : sourceScaleX;
-  const qreal scaleY = highDpi ? capture.monitor.scale : sourceScaleY;
+  const QSizeF outputScale = captureOutputScale(capture);
+  const qreal scaleX = outputScale.width();
+  const qreal scaleY = outputScale.height();
   const QPointF sourceOriginOffset(
       selection.left() * sourceScaleX - pixels.left(),
       selection.top() * sourceScaleY - pixels.top());
@@ -1215,6 +1223,16 @@ QImage renderCapture(const CaptureData &capture, const QRectF &selection,
   painter.restore();
   painter.end();
   return output;
+}
+
+QSize renderedCaptureLogicalSize(const CaptureData &capture,
+                                 const QSize &renderedSize) {
+  if (renderedSize.isEmpty() || capture.source.isNull() ||
+      capture.previewSize.isEmpty())
+    return {};
+  const QSizeF scale = captureOutputScale(capture);
+  return QSizeF(renderedSize.width() / scale.width(),
+                renderedSize.height() / scale.height()).toSize();
 }
 
 QImage renderSelectionBase(const CaptureData &capture, const QRectF &selection,

@@ -3343,8 +3343,15 @@ void CaptureEditor::pinSnapshot() {
         const QImage image =
             renderCapture(captureCopy, selection, annotations, background,
                           imageShadow, canvasBoundary, backdrop);
-        if (image.isNull() ||
-            !savePinnedSnapshot(image, path, selection.size().toSize(),
+        if (image.isNull()) {
+          result.error = QStringLiteral("Could not render pinned capture");
+          return result;
+        }
+        const QSize logical =
+            renderedCaptureLogicalSize(captureCopy, image.size());
+        if (!savePinnedSnapshot(image, path,
+                                logical.isEmpty() ? selection.size().toSize()
+                                                  : logical,
                                 result.error)) {
           if (result.error.isEmpty())
             result.error = QStringLiteral("Could not render pinned capture");

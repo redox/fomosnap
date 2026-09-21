@@ -44,6 +44,9 @@ Scrolling captures retain the monitor's scale when they become editable
 documents. Their native pixels stay intact; only the logical presentation size
 changes. Loaded documents also retain their exact pixel dimensions on export,
 even when the logical size was rounded for a scaled display.
+Flattened pins record the logical size of the entire rendered image, including
+its backdrop and expanded canvas, so reopening them preserves their proportions.
+The editable source's log still uses its original coordinates.
 
 ## The two exceptions, and why they're still safe
 
