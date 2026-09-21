@@ -285,6 +285,10 @@ void describeFileCapture(CaptureData &capture, QImage image,
                                    CanvasBoundaryMode boundaryMode =
                                        CanvasBoundaryMode::Framed,
                                    const QImage &customBackdrop = {});
+/** Logical size of a flattened render, including backdrop and canvas growth,
+ *  using the same pixel scale as renderCapture. */
+[[nodiscard]] QSize renderedCaptureLogicalSize(const CaptureData &capture,
+                                                const QSize &renderedSize);
 /** Lowercase serialization name ("aurora", "custom", ...) for a backdrop
  *  style, used in the operation log and the `[background] default` config
  *  key. */
