@@ -78,10 +78,11 @@ So damage is derived from what paints rather than modelled beside it.
 `pointerMotionRegion()` reads the same `liveLayers()` that `paintEdit()` draws,
 takes ink extents from `annotationPaintedBounds()` (the bounds that grow the
 canvas), adds the selection chrome around a carried layer, and
-`liveCanvasDamage()` repaints the backdrop strips when carrying a layer changes
-the canvas being previewed, or the whole canvas when a spotlight's dimming
-covers it or switches on: that happens on a pointer move, with the first pixel
-of a lens being dragged out, not on the press.
+`liveCanvasDamage()` repaints the mat when carrying a layer grows or shrinks
+the canvas being previewed (only the strips that differ for a flat mat, all of
+it for a gradient laid out afresh), or the whole canvas when a spotlight's
+dimming covers it or switches on: that happens on a pointer move, with the
+first pixel of a lens being dragged out, not on the press.
 `QWidget::grab()` repaints everything and so can never see a missed pixel; the
 smoke suite compares it against the backing store in the middle of a drag.
 

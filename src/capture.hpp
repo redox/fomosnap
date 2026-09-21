@@ -333,6 +333,9 @@ void paintDefaultLayer(QPainter &painter, const QImage &redacted,
 /** `customBackdrop` is the image drawn (cover-fit) for
  *  `BackgroundStyle::Custom`; a null image there paints nothing, same as
  *  `BackgroundStyle::None`. */
+inline constexpr qreal kBackdropMargin = 64.0;
+inline constexpr qreal kCaptureImageRadius = 14.0;
+
 void paintCaptureBackground(QPainter &painter, const QRectF &bounds,
                             BackgroundStyle backgroundStyle,
                             const QImage &customBackdrop = {});
