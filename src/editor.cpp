@@ -7219,13 +7219,9 @@ void CaptureEditor::paintEdit(QPainter &painter) {
   painter.translate(sourceImage.topLeft());
   painter.scale(editScale(), editScale());
   painter.save();
-  // While a layer is being carried, let it remain visible over the surround;
-  // the background settles to its final integer bounds once on release.
-  if (!liveOutsidePreview)
-    painter.setClipRect(canvasRect_, Qt::IntersectClip);
-  // Every mode previews where a carried layer's canvas would settle. Framed
-  // leaves its layers unclipped: a drag's layer is inside that preview
-  // already, and its counter ghost floats over the surround without one.
+  // Clip to the same live canvas as the mat, including a text draft's growth.
+  // Framed leaves carried layers unclipped so its counter ghost can float
+  // over the surround.
   if (!liveOutsidePreview || canvasBoundaryMode_ != CanvasBoundaryMode::Framed)
     painter.setClipRect(previewClip, Qt::IntersectClip);
   const bool hasSpotlight = showsSpotlight(defaultAnnotations);
