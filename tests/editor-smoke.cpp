@@ -1566,6 +1566,123 @@ bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** A label typed outside the image grows the canvas from the moment its
+ *  caret lands there and keeps pace with the text, instead of waiting for
+ *  the commit (and flashing away when the placing click ends). */
+bool runTextDraftGrowsCanvasSmoke(QApplication &application, QString &error) {
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 1400, 700};
+  capture.monitor.pixelSize = {1400, 700};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(600, 400, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#d8dde6")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+  editor.resize(1400, 700);
+  editor.show();
+  application.processEvents();
+  QTest::keyClick(&editor, Qt::Key_T);
+
+  const QRectF source(QPointF(), QSizeF(capture.previewSize));
+  const QRectF frame = editor.sourceFrameWidgetRectForTest();
+  const QPoint caret(qRound(frame.right()) + 40, qRound(frame.center().y()));
+  const auto matAt = [&editor](const QPointF &point) {
+    const QColor color = editor.grab().toImage().pixelColor(point.toPoint());
+    return color.alpha() == 255 && colorNear(color, QColor(0x24, 0x24, 0x24));
+  };
+  // Widget position just inside the live canvas's right edge, level with
+  // the top of the image so no pill or glyph is in the way.
+  const auto insideRightEdge = [&editor, &frame] {
+    return QPointF(frame.left() + (editor.liveCanvasForTest().right() - 5.0) *
+                                      editor.editScaleForTest(),
+                   frame.top() + 20.0);
+  };
+  if (editor.liveCanvasForTest() != source) {
+    error = QStringLiteral("Canvas was grown before any text was placed");
+    return false;
+  }
+
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, caret);
+  application.processEvents();
+  auto *draft = editor.findChild<QPlainTextEdit *>();
+  if (!draft || !draft->isVisible()) {
+    error = QStringLiteral("Text tool did not open an editor outside the image");
+    return false;
+  }
+  const QRectF placed = editor.liveCanvasForTest();
+  if (placed.right() < source.right() + 64.0 || !matAt(insideRightEdge())) {
+    error = QStringLiteral("Placing the text caret outside the image did not "
+                           "grow the canvas at once");
+    return false;
+  }
+
+  QTest::keyClicks(draft, QStringLiteral("well past the frame"));
+  application.processEvents();
+  const QRectF typed = editor.liveCanvasForTest();
+  if (typed.right() < placed.right() + 50.0 || !matAt(insideRightEdge())) {
+    error = QStringLiteral("Canvas did not keep growing with the text being "
+                           "typed (%1 then %2)")
+                .arg(placed.right())
+                .arg(typed.right());
+    return false;
+  }
+  for (int index = 0; index < 19; ++index)
+    QTest::keyClick(draft, Qt::Key_Backspace);
+  application.processEvents();
+  if (editor.liveCanvasForTest() != placed) {
+    error = QStringLiteral("Canvas did not shrink back with the deleted text");
+    return false;
+  }
+
+  // An empty caret clicked back inside the image takes its growth with it,
+  // and brings it back when it is placed outside again.
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    frame.center().toPoint());
+  application.processEvents();
+  if (!draft->isVisible() || editor.liveCanvasForTest() != source ||
+      matAt(QPointF(frame.right() + 30, frame.top() + 20))) {
+    error = QStringLiteral("A caret moved back inside the image left its "
+                           "canvas growth behind");
+    return false;
+  }
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, caret);
+  application.processEvents();
+  if (!draft->isVisible() || editor.liveCanvasForTest() != placed) {
+    error = QStringLiteral("Placing the caret outside again did not grow the "
+                           "canvas as before");
+    return false;
+  }
+
+  // Committed, the canvas settles exactly where the draft had already put
+  // it, with Framed's margin of mat beyond the label rather than flush.
+  QTest::keyClicks(draft, QStringLiteral("well past the frame"));
+  application.processEvents();
+  const QRectF beforeCommit = editor.liveCanvasForTest();
+  QTest::keyClick(draft, Qt::Key_Return);
+  application.processEvents();
+  if (editor.currentAnnotationsForTest().size() != 1 ||
+      editor.currentCanvasForTest() != beforeCommit) {
+    const QRectF settled = editor.currentCanvasForTest();
+    error = QStringLiteral("Committing the text moved the canvas the draft had "
+                           "been showing: %1 wide while typing, %2 settled")
+                .arg(beforeCommit.width())
+                .arg(settled.width());
+    return false;
+  }
+  const qreal labelRight =
+      annotationTextBounds(editor.currentAnnotationsForTest().constFirst())
+          .right();
+  if (beforeCommit.right() < labelRight + 15.0 ||
+      beforeCommit.right() > labelRight + 18.0) {
+    error = QStringLiteral("Typed text was not given its 15 px margin of mat");
+    return false;
+  }
+  editor.close();
+  return true;
+}
+
 bool runScrollScaleChecks(QString &error) {
   const QSize logicalSize(300, 500);
   for (const qreal scale : {1.0, 1.25, 1.5, 2.0}) {
@@ -10477,6 +10594,10 @@ int main(int argc, char **argv) {
   if (!runFramedLiveGrowthSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 139;
+  }
+  if (!runTextDraftGrowsCanvasSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 140;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;

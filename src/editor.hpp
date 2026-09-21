@@ -99,6 +99,11 @@ public:
   [[nodiscard]] QRectF currentSelection() const { return selection_; }
   /** Annotation-space canvas, including any strips grown past the source. */
   [[nodiscard]] QRectF currentCanvasForTest() const { return canvasRect_; }
+  /** Canvas the edit view shows right now: the settled one, or the preview a
+   *  carried layer or a label being typed gives it. */
+  [[nodiscard]] QRectF liveCanvasForTest() const {
+    return liveCanvas(liveLayers(cursor_)).rect;
+  }
   [[nodiscard]] CanvasBoundaryMode currentCanvasBoundaryForTest() const {
     return canvasBoundaryMode_;
   }
@@ -624,6 +629,9 @@ private:
     bool operator==(const LiveCanvas &) const = default;
   };
   [[nodiscard]] LiveCanvas liveCanvas(const LiveLayers &live) const;
+  /** The text layer the inline editor would commit right now, laid out as
+   *  its cream pill shows it. Only meaningful while textEditing(). */
+  [[nodiscard]] Annotation draftTextAnnotation() const;
   /** Pixels that depend on the pointer at `point`. `canvas`, when given,
    *  receives liveCanvas() for the same state. */
   [[nodiscard]] QRegion pointerMotionRegion(const QPointF &point,
