@@ -1683,6 +1683,101 @@ bool runTextDraftGrowsCanvasSmoke(QApplication &application, QString &error) {
   return true;
 }
 
+/** The inline editor is always sized to its text, so it has nothing to
+ *  scroll to: a long wrapped draft must never end up shifted sideways with
+ *  the start of every line cut off, whatever is typed or deleted. */
+bool runTextDraftNeverScrollsSmoke(QApplication &application, QString &error) {
+  // Larger than the window, so the editor shows it scaled: display-font line
+  // widths then round differently from the logical wrap, and the end of a
+  // full line can sit a pixel past the editor's right edge. Qt answers that
+  // by centring the caret, which shifts the whole draft by half its width.
+  CaptureData capture;
+  capture.monitor.name = QStringLiteral("TEST");
+  capture.monitor.geometry = {0, 0, 1400, 700};
+  capture.monitor.pixelSize = {1400, 700};
+  capture.monitor.scale = 1.0;
+  capture.source = QImage(1500, 900, QImage::Format_ARGB32_Premultiplied);
+  capture.source.fill(QColor(QStringLiteral("#d8dde6")));
+  capture.previewSize = capture.source.size();
+
+  CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
+  editor.resize(1400, 700);
+  editor.show();
+  application.processEvents();
+  if (qFuzzyCompare(editor.editScaleForTest(), 1.0)) {
+    error = QStringLiteral("Draft scroll check needs a scaled editor");
+    return false;
+  }
+  QTest::keyClick(&editor, Qt::Key_T);
+  const QRectF frame = editor.sourceFrameWidgetRectForTest();
+  QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier,
+                    QPoint(qRound(frame.left()) + 40, qRound(frame.top()) + 40));
+  application.processEvents();
+  auto *draft = editor.findChild<QPlainTextEdit *>();
+  if (!draft || !draft->isVisible()) {
+    error = QStringLiteral("Text tool did not open its editor");
+    return false;
+  }
+  const auto shifted = [draft](const QString &when, QString &problem) {
+    if (draft->horizontalScrollBar()->value() == 0 &&
+        draft->verticalScrollBar()->value() == 0)
+      return false;
+    problem = QStringLiteral("Inline text editor scrolled to %1,%2 %3")
+                  .arg(draft->horizontalScrollBar()->value())
+                  .arg(draft->verticalScrollBar()->value())
+                  .arg(when);
+    return true;
+  };
+  // Every prefix of a long paragraph, grown and then taken back again one
+  // character at a time, so the caret visits the end of every wrapped line.
+  // Words of every length from one to nine letters, so that some line ends
+  // up full to the last pixel with its trailing space hanging past the wrap.
+  QString paragraph;
+  for (int word = 0; word < 110; ++word)
+    paragraph += QString(1 + (word * 7) % 9, QLatin1Char('a' + word % 26)) +
+                 QLatin1Char(' ');
+  int typed = 0;
+  for (const QChar character : std::as_const(paragraph)) {
+    QTest::keyClick(draft, character.toLatin1());
+    ++typed;
+    if (shifted(QStringLiteral("while typing (%1 characters)").arg(typed),
+                error))
+      return false;
+  }
+  if (draft->document()->firstBlock().layout()->lineCount() < 3) {
+    error = QStringLiteral("Long draft did not wrap, so nothing was tested");
+    return false;
+  }
+  // Qt takes the draft to be as wide as its longest paragraph unwrapped, so
+  // the hidden horizontal bar has somewhere to go. Centring the caret does
+  // that, and so does a sideways swipe on a touchpad over the box.
+  if (draft->horizontalScrollBar()->maximum() <= 0) {
+    error = QStringLiteral("Draft had no sideways range, so nothing was tested");
+    return false;
+  }
+  const QPointF over = draft->viewport()->rect().center();
+  QWheelEvent swipe(over, draft->viewport()->mapToGlobal(over), QPoint(-180, 0),
+                    QPoint(-360, 0), Qt::NoButton, Qt::NoModifier,
+                    Qt::ScrollUpdate, false);
+  QApplication::sendEvent(draft->viewport(), &swipe);
+  if (shifted(QStringLiteral("after a sideways swipe"), error))
+    return false;
+  draft->horizontalScrollBar()->setValue(
+      draft->horizontalScrollBar()->maximum() / 2); // as centring the caret does
+  if (shifted(QStringLiteral("after Qt centred the caret"), error))
+    return false;
+  for (int index = 0; index < typed - 10; ++index) {
+    QTest::keyClick(draft, Qt::Key_Backspace);
+    if (shifted(QStringLiteral("after Backspace %1").arg(index + 1), error))
+      return false;
+  }
+  QTest::qWait(30); // deferred scrollbar resets have had their turn
+  if (shifted(QStringLiteral("once settled"), error))
+    return false;
+  editor.close();
+  return true;
+}
+
 bool runScrollScaleChecks(QString &error) {
   const QSize logicalSize(300, 500);
   for (const qreal scale : {1.0, 1.25, 1.5, 2.0}) {
@@ -10598,6 +10693,10 @@ int main(int argc, char **argv) {
   if (!runTextDraftGrowsCanvasSmoke(application, snapshotError)) {
     qWarning().noquote() << snapshotError;
     return 140;
+  }
+  if (!runTextDraftNeverScrollsSmoke(application, snapshotError)) {
+    qWarning().noquote() << snapshotError;
+    return 141;
   }
   if (!runQuickOutputChecks(snapshotError)) {
     qWarning().noquote() << snapshotError;
