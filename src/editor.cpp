@@ -2221,6 +2221,14 @@ QRectF CaptureEditor::annotationWorkspaceRect() const {
 bool CaptureEditor::canStartAnnotationAt(const QPointF &position) const {
   if (!annotationWorkspaceRect().contains(position))
     return false;
+  // The toolbar row floats down to sit just above the image, so it lands
+  // inside the geometric workspace. The row and a little padding under the
+  // buttons stay chrome: a stroke must not start in the gap you missed a
+  // button by.
+  const qreal barTop = toolbarTop();
+  const qreal barBottom = barTop + 36.0 * toolbarScale(width());
+  if (position.y() >= barTop && position.y() < barBottom + 4.0)
+    return false;
   // Popovers overlap the content band. Their buttons are handled before the
   // workspace, while their padding must remain chrome rather than canvas.
   if ((colorPaletteOpen_ && colorPaletteRect().contains(position)) ||
@@ -2309,9 +2317,9 @@ void CaptureEditor::resetView() {
 }
 
 QVector<QRectF> CaptureEditor::cropHandleRects() const {
-  const QRectF image = sourceFrameWidgetRect().intersected(
-      visibleEditImageRect());
-  if (image.isEmpty())
+  const QRectF image = sourceFrameWidgetRect();
+  const QRectF visible = image.intersected(visibleEditImageRect());
+  if (visible.isEmpty())
     return {};
   constexpr qreal outside = 7;
   constexpr qreal size = 12;
@@ -2325,10 +2333,29 @@ QVector<QRectF> CaptureEditor::cropHandleRects() const {
       QPointF(image.center().x(), image.bottom() + outside),
       image.bottomLeft() + QPointF(-outside, outside),
       QPointF(image.left() - outside, image.center().y())};
+  const std::array<QPointF, 8> edges{
+      image.topLeft(),
+      QPointF(image.center().x(), image.top()),
+      image.topRight(),
+      QPointF(image.right(), image.center().y()),
+      image.bottomRight(),
+      QPointF(image.center().x(), image.bottom()),
+      image.bottomLeft(),
+      QPointF(image.left(), image.center().y())};
   QVector<QRectF> handles;
   handles.reserve(static_cast<qsizetype>(centers.size()));
-  for (const QPointF &center : centers)
-    handles.push_back({center.x() - half, center.y() - half, size, size});
+  for (std::size_t index = 0; index < centers.size(); ++index) {
+    const QPointF center = centers[index];
+    // Keep handle indices stable, but never invent an edge at the viewport
+    // boundary: dragging maps against the real, unclipped source rectangle.
+    // QRectF::contains excludes the right and bottom edges, so a source that
+    // sits fully inside the viewport would otherwise lose those handles.
+    const QRectF edgeVisible = visible.adjusted(0, 0, 0.5, 0.5);
+    handles.push_back(edgeVisible.contains(edges[index])
+                          ? QRectF(center.x() - half, center.y() - half, size,
+                                   size)
+                          : QRectF());
+  }
   return handles;
 }
 
@@ -7567,7 +7594,8 @@ void CaptureEditor::paintEdit(QPainter &painter) {
         (button.action == QStringLiteral("shape-ellipse") &&
          tool_ == Tool::Ellipse) ||
         (button.action == QStringLiteral("shape-fill") && fillShapes_) ||
-        (button.action == QStringLiteral("background") && hasBackground) ||
+        (button.action == QStringLiteral("background") &&
+         hasCaptureBackground()) ||
         (button.action == QStringLiteral("palette") && colorPaletteOpen_) ||
         (button.action == QStringLiteral("custom-color") &&
          usingCustomColor_) ||

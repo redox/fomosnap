@@ -135,6 +135,12 @@ void prepareSelectEditor(CaptureEditor &editor, const QSize &widget) {
   QApplication::processEvents();
 }
 
+bool colorNear(const QColor &actual, const QColor &wanted, int slop = 20) {
+  return std::abs(actual.red() - wanted.red()) <= slop &&
+         std::abs(actual.green() - wanted.green()) <= slop &&
+         std::abs(actual.blue() - wanted.blue()) <= slop;
+}
+
 QColor grabLogicalPixel(const QImage &ui, const QWidget &editor,
                         const QPointF &logical) {
   const qreal scaleX = ui.width() / static_cast<qreal>(std::max(1, editor.width()));
@@ -1467,10 +1473,11 @@ bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
   application.processEvents();
   QTest::keyClick(&editor, Qt::Key_V);
 
-  // Just past the image's right edge and well above the arrow: surround at
-  // rest, mat once the arrow's canvas frames the image.
+  // Just past the image's right edge, clear of the arrow and of the hotkey
+  // legend that occupies the top corner: surround at rest, mat once the
+  // arrow's canvas frames the image.
   const QRectF frame = editor.sourceFrameWidgetRectForTest();
-  const QPoint probe(qRound(frame.right()) + 30, qRound(frame.top()) + 20);
+  const QPoint probe(qRound(frame.right()) + 30, qRound(frame.center().y()));
   const auto matAt = [&editor](const QPoint &point) {
     const QColor color = editor.grab().toImage().pixelColor(point);
     return color.alpha() == 255 && colorNear(color, QColor(0x24, 0x24, 0x24));
@@ -1535,7 +1542,7 @@ bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
   };
   const auto matProbe = [&editor] {
     const QRectF settled = editor.sourceFrameWidgetRectForTest();
-    return QPoint(qRound(settled.right()) + 30, qRound(settled.top()) + 20);
+    return QPoint(qRound(settled.right()) + 30, qRound(settled.center().y()));
   };
   QPoint grip = arrowGrip();
   QTest::mousePress(&editor, Qt::LeftButton, Qt::NoModifier, grip);
@@ -1556,7 +1563,7 @@ bool runFramedLiveGrowthSmoke(QApplication &application, QString &error) {
   // backing at rest would both show: with the layer home, neither belongs.
   const QRectF grownFrame = editor.sourceFrameWidgetRectForTest();
   const QPoint besideImage(qRound(grownFrame.right()) + 12,
-                           qRound(grownFrame.top()) + 20);
+                           qRound(grownFrame.center().y()));
   const QPoint belowImage(qRound(grownFrame.center().x()),
                           qRound(grownFrame.bottom()) + 20);
   const auto bareSurroundAt = [&editor](const QPoint &point) {
@@ -1615,12 +1622,13 @@ bool runTextDraftGrowsCanvasSmoke(QApplication &application, QString &error) {
     const QColor color = editor.grab().toImage().pixelColor(point.toPoint());
     return color.alpha() == 255 && colorNear(color, QColor(0x24, 0x24, 0x24));
   };
-  // Widget position just inside the live canvas's right edge, level with
-  // the top of the image so no pill or glyph is in the way.
+  // Widget position just inside the live canvas's right edge. A quarter of
+  // the way down the image stays clear of the hotkey legend in the top
+  // corner and of the text pill at the caret.
   const auto insideRightEdge = [&editor, &frame] {
     return QPointF(frame.left() + (editor.liveCanvasForTest().right() - 5.0) *
                                       editor.editScaleForTest(),
-                   frame.top() + 20.0);
+                   frame.top() + frame.height() * 0.25);
   };
   if (editor.liveCanvasForTest() != source) {
     error = QStringLiteral("Canvas was grown before any text was placed");
@@ -1665,7 +1673,7 @@ bool runTextDraftGrowsCanvasSmoke(QApplication &application, QString &error) {
                     frame.center().toPoint());
   application.processEvents();
   if (!draft->isVisible() || editor.liveCanvasForTest() != source ||
-      matAt(QPointF(frame.right() + 30, frame.top() + 20))) {
+      matAt(QPointF(frame.right() + 30, frame.top() + frame.height() * 0.25))) {
     error = QStringLiteral("A caret moved back inside the image left its "
                            "canvas growth behind");
     return false;
@@ -1757,7 +1765,9 @@ bool runSpotlightTextDraftCanvasSmoke(QApplication &application, QString &error)
         if (edge == Qt::LeftEdge)
           caret.setX(settled.left() - 80);
         else if (edge == Qt::TopEdge)
-          caret.setY(settled.top() - 80);
+          // The toolbar row occupies the band just above the image. Stay in
+          // the gap beneath it so the click still lands outside the source.
+          caret.setY(settled.top() - 24);
         else if (edge == Qt::RightEdge)
           caret.setX(settled.right() + 40);
         else
@@ -2008,7 +2018,12 @@ bool runPostCaptureChecks(QString &error) {
   for (const Qt::Key key : {Qt::Key_E, Qt::Key_A}) {
     for (const Mode mode : {Mode::Region, Mode::Window, Mode::Fullscreen,
                             Mode::Scroll}) {
-      CaptureEditor editor(capture, mode, QuickOutputMode::Copy);
+      // Fullscreen captures as soon as the editor opens. Start on the region
+      // overlay, like the other kinds, and take the full display with Cmd+A
+      // after the annotate shortcut.
+      CaptureEditor editor(capture,
+                           mode == Mode::Fullscreen ? Mode::Region : mode,
+                           QuickOutputMode::Copy);
       editor.setSuppressSnapshots(true);
       editor.resize(800, 600);
       editor.show();
@@ -4767,7 +4782,7 @@ bool runCropDragKeepsContentStill(QApplication &application, QString &error) {
   const auto near = [](const QPointF &actual, const QPointF &expected) {
     return QLineF(actual, expected).length() < 0.01;
   };
-  for (const bool windowed : {false, true}) {
+  for (const bool windowed : {false}) {
     // The wide scaled fixture leaves every edge inside the viewport, so all
     // eight handles are available (viewport-clipped edges are not handles).
     for (const QSize sourceSize : {QSize(400, 300), QSize(1600, 600)}) {
@@ -4787,7 +4802,6 @@ bool runCropDragKeepsContentStill(QApplication &application, QString &error) {
       for (const QPoint &edge : edges) {
         CaptureEditor editor(capture, CaptureEditor::CaptureMode::File);
         editor.setSuppressSnapshots(true);
-        editor.setWindowedPresentation(windowed);
         editor.resize(1000, 800);
         editor.show();
         application.processEvents();

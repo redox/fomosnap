@@ -45,7 +45,6 @@ bool runSelectionRepaintSmoke(QApplication &application, QString &error) {
     CaptureEditor editor(capture, CaptureEditor::CaptureMode::File,
                          QuickOutputMode::None, log);
     editor.setSuppressSnapshots(true);
-    editor.setWindowedPresentation(false);
     editor.resize(1600, 1000);
     editor.show();
     application.processEvents();
