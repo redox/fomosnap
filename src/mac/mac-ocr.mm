@@ -85,14 +85,18 @@ QString recognizeTextWithVision(const QImage &image,
         return leftX < rightX ? NSOrderedAscending : NSOrderedDescending;
       }];
 
-  QStringList lines;
+  // Stay in Foundation until the lines are joined. Building a QStringList
+  // here crashes: this file is Objective-C++, and the first append into a
+  // default-constructed list dereferences its null data pointer.
+  NSMutableArray<NSString *> *lines = [NSMutableArray array];
   for (VNRecognizedTextObservation *observation in ordered) {
     VNRecognizedText *best = [observation topCandidates:1].firstObject;
     if (best.string.length > 0)
-      lines.append(QString::fromNSString(best.string));
+      [lines addObject:best.string];
   }
 
-  const QString text = lines.join(QLatin1Char('\n')).trimmed();
+  const QString text =
+      QString::fromNSString([lines componentsJoinedByString:@"\n"]).trimmed();
   if (text.isEmpty())
     error = QStringLiteral("No text found in selection");
   return text;

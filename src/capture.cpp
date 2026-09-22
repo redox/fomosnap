@@ -393,6 +393,233 @@ QString screenshotTargetPath(QString &error, const QString &appSlug) {
   return path;
 }
 
+constexpr std::array<qreal, 6> kArrowLineWidths{1.5, 3.0, 5.0, 7.0, 11.0, 16.0};
+constexpr std::array<qreal, 6> kStandardBodyWidths{5.5,  7.0,  11.5,
+                                                   14.5, 19.5, 29.5};
+constexpr std::array<qreal, 6> kStandardBackWidths{1.5, 2.5, 3.5,
+                                                   4.5, 6.0, 8.5};
+constexpr std::array<qreal, 6> kStandardHeadLengths{15.0, 20.0, 31.5,
+                                                    38.0, 52.0, 78.5};
+constexpr std::array<qreal, 6> kStandardHeadHeights{14.0, 18.5, 29.0,
+                                                    36.0, 49.0, 75.0};
+constexpr std::array<qreal, 6> kPointyBodyWidths{8.0,  10.0, 16.0,
+                                                 20.0, 27.0, 41.0};
+constexpr std::array<qreal, 6> kPointyBackWidths{1.5, 1.5, 1.75, 2.0, 2.5, 3.5};
+constexpr std::array<qreal, 6> kPointyHeadLengths{15.5, 22.0, 34.5,
+                                                  43.0, 59.0, 89.5};
+constexpr std::array<qreal, 6> kPointyHeadHeights{15.5, 22.0, 33.0,
+                                                  41.5, 56.5, 85.5};
+constexpr std::array<qreal, 6> kCurvedHeadSides{9.0,  9.0,  15.0,
+                                                19.0, 26.0, 40.0};
+constexpr std::array<qreal, 6> kCurvedShaftWidths{3.0, 3.0,  6.0,
+                                                  7.5, 11.5, 18.5};
+constexpr qreal kStandardShoulderRatio = 0.05;
+constexpr qreal kPointyWingBackRatio = 0.22;
+constexpr qreal kPointyWingHeightRatio = 0.22;
+constexpr qreal kCurveAmount = 0.25;
+constexpr qreal kOpenHeadHalfAngle = std::numbers::pi_v<qreal> / 4.0;
+
+qreal arrowMetric(qreal lineWidth, const std::array<qreal, 6> &values) {
+  const qreal width = std::max<qreal>(0.01, lineWidth);
+  if (width <= kArrowLineWidths.front())
+    return values.front() * width / kArrowLineWidths.front();
+  if (width >= kArrowLineWidths.back())
+    return values.back() * width / kArrowLineWidths.back();
+  const auto upper =
+      std::upper_bound(kArrowLineWidths.begin(), kArrowLineWidths.end(), width);
+  const auto high =
+      static_cast<std::size_t>(std::distance(kArrowLineWidths.begin(), upper));
+  const auto low = high - 1;
+  const qreal amount = (width - kArrowLineWidths.at(low)) /
+                       (kArrowLineWidths.at(high) - kArrowLineWidths.at(low));
+  return std::lerp(values.at(low), values.at(high), amount);
+}
+
+struct ArrowGeometry {
+  QPainterPath fill;
+  QPainterPath stroke;
+  qreal strokeWidth = 0.0;
+};
+
+QPointF arrowPoint(const QPointF &origin, const QPointF &along,
+                   const QPointF &across, qreal x, qreal y) {
+  return origin + along * x + across * y;
+}
+
+QPointF defaultCurveControl(const Annotation &annotation) {
+  const QPointF chord = annotation.end - annotation.start;
+  return (annotation.start + annotation.end) / 2.0 +
+         QPointF(chord.y(), -chord.x()) * kCurveAmount;
+}
+
+QPointF curveControl(const Annotation &annotation) {
+  return annotation.curveControl.value_or(defaultCurveControl(annotation));
+}
+
+QPointF quadraticPoint(const QPointF &start, const QPointF &control,
+                       const QPointF &end, qreal amount) {
+  const qreal remaining = 1.0 - amount;
+  return start * (remaining * remaining) +
+         control * (2.0 * remaining * amount) + end * (amount * amount);
+}
+
+qreal pointToSegmentDistance(const QPointF &point, const QPointF &start,
+                             const QPointF &end) {
+  const QPointF segment = end - start;
+  const qreal lengthSquared = QPointF::dotProduct(segment, segment);
+  if (lengthSquared <= 0.000001)
+    return QLineF(point, start).length();
+  const qreal amount = std::clamp(
+      QPointF::dotProduct(point - start, segment) / lengthSquared, 0.0, 1.0);
+  return QLineF(point, start + segment * amount).length();
+}
+
+void addOpenArrowHead(QPainterPath &path, const QPointF &tip,
+                      const QPointF &direction, qreal sideLength) {
+  const qreal length = QLineF(QPointF(), direction).length();
+  if (length < 0.001)
+    return;
+  const QPointF along = direction / length;
+  const QPointF across(-along.y(), along.x());
+  const qreal back = sideLength * std::cos(kOpenHeadHalfAngle);
+  const qreal side = sideLength * std::sin(kOpenHeadHalfAngle);
+  const QPointF root = tip - along * back;
+  path.moveTo(root + across * side);
+  path.lineTo(tip);
+  path.lineTo(root - across * side);
+}
+
+ArrowGeometry makeArrowGeometry(const Annotation &annotation,
+                                qreal displayScale = 1.0) {
+  ArrowGeometry geometry;
+  const QPointF chord = annotation.end - annotation.start;
+  const qreal length = QLineF(QPointF(), chord).length();
+  if (length < 1.0)
+    return geometry;
+  const QPointF along = chord / length;
+  const QPointF across(-along.y(), along.x());
+
+  if (annotation.arrowStyle == ArrowStyle::Curved ||
+      annotation.arrowStyle == ArrowStyle::Double) {
+    const QPointF control = curveControl(annotation);
+    geometry.stroke.moveTo(annotation.start);
+    geometry.stroke.quadTo(control, annotation.end);
+    const qreal headSide = arrowMetric(annotation.size, kCurvedHeadSides);
+    const auto tangentOrChord = [&](const QPointF &tangent,
+                                    const QPointF &fallback) {
+      return QLineF(QPointF(), tangent).length() < 0.001 ? fallback : tangent;
+    };
+    addOpenArrowHead(geometry.stroke, annotation.end,
+                     tangentOrChord(annotation.end - control, chord), headSide);
+    if (annotation.arrowStyle == ArrowStyle::Double)
+      addOpenArrowHead(geometry.stroke, annotation.start,
+                       tangentOrChord(annotation.start - control, -chord),
+                       headSide);
+    geometry.strokeWidth = arrowMetric(annotation.size, kCurvedShaftWidths);
+    return geometry;
+  }
+
+  const bool pointy = annotation.arrowStyle == ArrowStyle::Pointy;
+  const qreal bodyWidth = arrowMetric(
+      annotation.size, pointy ? kPointyBodyWidths : kStandardBodyWidths);
+  const qreal naturalBackWidth = arrowMetric(
+      annotation.size, pointy ? kPointyBackWidths : kStandardBackWidths);
+  // Keep the tail at its 1:1 screen width while zoomed out.
+  const qreal backWidth =
+      std::min(naturalBackWidth /
+                   std::clamp(displayScale, qreal(0.0001), qreal(1.0)),
+               bodyWidth);
+  qreal headLength = arrowMetric(
+      annotation.size, pointy ? kPointyHeadLengths : kStandardHeadLengths);
+  const qreal headHalfHeight =
+      arrowMetric(annotation.size,
+                  pointy ? kPointyHeadHeights : kStandardHeadHeights) /
+      2.0;
+  headLength = std::min(headLength, length * 0.95);
+  const qreal outerX = length - headLength;
+  const qreal innerX =
+      outerX + (pointy ? 0.0 : headLength * kStandardShoulderRatio);
+  const qreal wingX =
+      pointy ? outerX - headLength * kPointyWingBackRatio : outerX;
+  const qreal wingHalfHeight =
+      pointy ? headHalfHeight * (1.0 + kPointyWingHeightRatio) : headHalfHeight;
+  const qreal bodyHalf =
+      std::max<qreal>(0.0, bodyWidth - (pointy ? 0.0 : backWidth)) / 2.0;
+  const qreal backHalf = pointy ? backWidth / 2.0 : 0.0;
+
+  geometry.fill.moveTo(
+      arrowPoint(annotation.start, along, across, 0.0, backHalf));
+  geometry.fill.lineTo(
+      arrowPoint(annotation.start, along, across, innerX, bodyHalf));
+  geometry.fill.lineTo(
+      arrowPoint(annotation.start, along, across, wingX, wingHalfHeight));
+  geometry.fill.lineTo(annotation.end);
+  geometry.fill.lineTo(
+      arrowPoint(annotation.start, along, across, wingX, -wingHalfHeight));
+  geometry.fill.lineTo(
+      arrowPoint(annotation.start, along, across, innerX, -bodyHalf));
+  geometry.fill.lineTo(
+      arrowPoint(annotation.start, along, across, 0.0, -backHalf));
+  geometry.fill.closeSubpath();
+  if (!pointy) {
+    geometry.stroke = geometry.fill;
+    geometry.strokeWidth = backWidth;
+  }
+  return geometry;
+}
+
+QRectF strokedBounds(const QPainterPath &path, qreal width) {
+  if (path.isEmpty())
+    return {};
+  const qreal radius = width / 2.0;
+  return path.boundingRect().adjusted(-radius, -radius, radius, radius);
+}
+
+QRectF arrowVisualBoundsInternal(const Annotation &annotation,
+                                 qreal displayScale) {
+  const ArrowGeometry geometry = makeArrowGeometry(annotation, displayScale);
+  QRectF bounds = geometry.fill.boundingRect();
+  const QRectF stroke = strokedBounds(geometry.stroke, geometry.strokeWidth);
+  if (bounds.isEmpty())
+    bounds = stroke;
+  else if (!stroke.isEmpty())
+    bounds = bounds.united(stroke);
+  return bounds;
+}
+
+bool arrowContainsPointInternal(const Annotation &annotation,
+                                const QPointF &point, qreal tolerance) {
+  const QPointF chord = annotation.end - annotation.start;
+  if (QPointF::dotProduct(chord, chord) < 1.0)
+    return false;
+
+  const bool pointy = annotation.arrowStyle == ArrowStyle::Pointy;
+  const qreal headLength = arrowMetric(
+      annotation.size, pointy ? kPointyHeadLengths : kStandardHeadLengths);
+  if (annotation.arrowStyle == ArrowStyle::Standard || pointy) {
+    const qreal bodyWidth = arrowMetric(
+        annotation.size, pointy ? kPointyBodyWidths : kStandardBodyWidths);
+    const qreal pick = std::max(bodyWidth, headLength) / 2.0 + tolerance;
+    return pointToSegmentDistance(point, annotation.start, annotation.end) <=
+           pick;
+  }
+
+  const qreal shaftWidth = arrowMetric(annotation.size, kCurvedShaftWidths);
+  const qreal pick = std::max(shaftWidth, headLength) / 2.0 + tolerance;
+  const QPointF control = curveControl(annotation);
+  constexpr int segments = 24;
+  QPointF previous = annotation.start;
+  for (int index = 1; index <= segments; ++index) {
+    const QPointF next = quadraticPoint(annotation.start, control,
+                                        annotation.end,
+                                        qreal(index) / qreal(segments));
+    if (pointToSegmentDistance(point, previous, next) <= pick)
+      return true;
+    previous = next;
+  }
+  return false;
+}
+
 void drawAnnotation(QPainter &painter, const Annotation &annotation,
                     qreal canvasWidth, qreal arrowDisplayScale) {
   // Redactions replace source pixels in renderCapture before ordinary vector
