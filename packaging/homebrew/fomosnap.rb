@@ -17,22 +17,23 @@ cask "fomosnap" do
   app "FOMOsnap.app"
   binary "fomosnap"
 
-  postflight do
-    marker =
-      Pathname(Dir.home)/"Library/Application Support/fomosnap/homebrew-agent-defaulted"
-    plist =
-      Pathname(Dir.home)/"Library/LaunchAgents/com.fomosnap.FOMOsnap.agent.plist"
-    executable = appdir/"FOMOsnap.app/Contents/MacOS/FOMOsnap"
-
-    # Enable the resident agent on a fresh install. On upgrades, only reload
-    # it when the user already has the login item; an explicit
-    # --uninstall-agent must remain an opt-out.
-    if plist.exist? || !marker.exist?
-      system_command executable, args: ["--install-agent"]
+  # Enable the resident agent on a fresh install. On upgrades, only reload it
+  # when the login item is already present; an explicit --uninstall-agent must
+  # remain an opt-out. The marker records that the default was applied.
+  postflight_steps do
+    if_path_exists "~/Library/LaunchAgents/com.fomosnap.FOMOsnap.agent.plist" do
+      run "FOMOsnap.app/Contents/MacOS/FOMOsnap",
+          args:           ["--install-agent"],
+          base:           :appdir,
+          writable_paths: ["~/Library/LaunchAgents"]
     end
-    next if marker.exist?
-
-    marker.parent.mkpath
-    FileUtils.touch(marker.to_s)
+    unless_path_exists "~/Library/Application Support/fomosnap/homebrew-agent-defaulted" do
+      run "FOMOsnap.app/Contents/MacOS/FOMOsnap",
+          args:           ["--install-agent"],
+          base:           :appdir,
+          writable_paths: ["~/Library/LaunchAgents"]
+      mkdir_p "~/Library/Application Support/fomosnap"
+      touch "~/Library/Application Support/fomosnap/homebrew-agent-defaulted"
+    end
   end
 end

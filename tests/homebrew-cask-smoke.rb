@@ -39,8 +39,29 @@ class Cask
     instance_eval(&@postflight)
   end
 
-  def postflight(&block)
+  def postflight_steps(&block)
     @postflight = block
+  end
+
+  def if_path_exists(path, &block)
+    instance_eval(&block) if File.exist?(File.expand_path(path))
+  end
+
+  def unless_path_exists(path, &block)
+    instance_eval(&block) unless File.exist?(File.expand_path(path))
+  end
+
+  def run(command, args: [], base: nil, **_options)
+    executable = base == :appdir ? appdir.join(command) : command
+    system_command(executable, args:)
+  end
+
+  def mkdir_p(path)
+    Pathname(File.expand_path(path)).mkpath
+  end
+
+  def touch(path)
+    FileUtils.touch(File.expand_path(path))
   end
 
   def method_missing(_name, *_arguments)
